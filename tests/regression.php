@@ -198,7 +198,43 @@ check(strpos($out, 'backend down') === false,
 //
 // The fixes above must not have quietly changed the contract.
 
-echo "\n--- 3. the routes still behave ---\n";
+// ============================================== the two cards must never disagree
+//
+// The plain card is rebuilt every request; the signed one is cached for an hour. Anything
+// that changes the card's CONTENT — a rename, or simply activating WooCommerce, which adds
+// a skill without touching any option this plugin owns — left the two disagreeing until the
+// cache expired. A visitor trusts the SIGNED card, so the change was invisible to every
+// agent while looking perfectly correct to the site owner. Found on a live install.
+
+echo "\n--- 3. the signed card always signs the card actually being served ---\n";
+
+$store = new MemoryStore();
+$mk = static function (array $skills) use ($store): Entry {
+    return new Entry(hex2bin(str_repeat('2b', 32)), 'https://shop.example', [
+        'name' => 'Regression Shop', 'store' => $store, 'skills' => $skills,
+        'responder' => static fn(array $e): string => 'answered',
+    ]);
+};
+
+$before = $mk([]);
+[, , $env1] = $before->handle('GET', '/.well-known/agent-card.sig.json', [], '');
+$signed1 = json_decode($env1, true);
+check(($signed1['card']['skills'] ?? null) === [], 'the signed card starts with no skills');
+
+// The same store, a new request, and now the site has a catalogue.
+$after = $mk([['id' => 'product-search', 'name' => 'Search the catalogue']]);
+[, , $plain] = $after->handle('GET', '/.well-known/agent-card.json', [], '');
+[, , $env2] = $after->handle('GET', '/.well-known/agent-card.sig.json', [], '');
+$signed2 = json_decode($env2, true);
+$plainSkills = json_decode($plain, true)['skills'] ?? null;
+check($plainSkills === $signed2['card']['skills'] ?? null,
+    'the signed card re-mints when the card content changes (it is not stale)',
+    'plain ' . json_encode($plainSkills) . ' vs signed '
+    . json_encode($signed2['card']['skills'] ?? null));
+check(($signed2['card']['skills'][0]['id'] ?? null) === 'product-search',
+    'the newly added skill is inside the SIGNED card, which is the one visitors trust');
+
+echo "\n--- 4. the routes still behave ---\n";
 
 [$status, $h, $out] = $entry->handle('GET', '/.well-known/agent-card.json', [], '');
 check($status === 200 && (json_decode($out, true)['did'] ?? null) === $entry->did(),

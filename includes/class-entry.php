@@ -238,13 +238,47 @@ final class Entry
         $now = time();
         if ($cached !== null && isset($cached['ts'])
             && ($now - (int) $cached['ts']) < self::CARD_SIG_REFRESH_S
-            && ($now - (int) $cached['ts']) >= 0) {
+            && ($now - (int) $cached['ts']) >= 0
+            && self::envelopeMatches($cached['bytes'], $this->card)) {
             return $cached['bytes'];
         }
         $env = Wire::makeCardEnvelope($this->seed, $this->card, $now);
         $bytes = Wire::jsonBytes($env);
         $this->store->putCardEnvelope($now, $bytes);
         return $bytes;
+    }
+
+    /**
+     * Does a cached envelope still sign THE CARD WE WOULD SERVE NOW?
+     *
+     * The plain card is rebuilt on every request while the signed one is cached for an
+     * hour, so anything that changes the card's content leaves the two documents
+     * disagreeing until the cache expires — and a visitor trusts the SIGNED one, so the
+     * change is invisible to every agent for up to an hour while looking correct to the
+     * site owner.
+     *
+     * An earlier fix watched the two settings fields, which was too narrow: activating
+     * WooCommerce adds a `skills` entry without touching any option this plugin owns, and
+     * that is exactly what happened on a real install — the catalogue answered questions
+     * perfectly while the signed card advertised no catalogue at all. Comparing the CONTENT
+     * cannot miss a cause, so it compares the content.
+     *
+     * @param mixed $bytes the cached envelope as served.
+     */
+    private static function envelopeMatches($bytes, array $card): bool
+    {
+        if (!is_string($bytes) || $bytes === '') {
+            return false;
+        }
+        $decoded = json_decode($bytes, true);
+        if (!is_array($decoded) || !is_array($decoded['card'] ?? null)) {
+            return false;
+        }
+        try {
+            return Wire::canonicalJson($decoded['card']) === Wire::canonicalJson($card);
+        } catch (\Throwable $e) {
+            return false;                      // unreadable cache: re-mint rather than serve
+        }
     }
 
     /** Force a fresh envelope regardless of cache age (what WP-Cron calls). */
