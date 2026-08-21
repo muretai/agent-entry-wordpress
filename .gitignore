@@ -1,0 +1,7 @@
+# Never commit key material or local state.
+*.key
+*.seed
+state.json
+agent-entry-state.json
+.DS_Store
+vendor/
