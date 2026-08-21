@@ -4,7 +4,7 @@ Tags: ai, agents, ai-agents, woocommerce, automation
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 0.1.1
+Stable tag: 0.1.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -24,8 +24,10 @@ never sent anywhere) and four routes:
 * `POST /` — the door: send a signed message, get a signed reply
 
 Your home page is untouched, and so is your checkout: the door answers a POST only when it
-carries `Content-Type: application/json`, so WooCommerce's form-encoded AJAX falls straight
-through to WordPress.
+carries `Content-Type: application/json` and no query string, so WooCommerce's form-encoded
+AJAX, its `?wc-api=` payment webhooks and every other query-multiplexed route fall straight
+through to WordPress. Tagged links (`/?utm_source=...`) arrive with GET, which is always
+your site's, so analytics are untouched too.
 
 **Every visitor gets an account, with no signup.** The first signed message from a
 stranger *is* their account, because they already proved control of a key — more than an
@@ -104,10 +106,25 @@ every forged one is refused.
 
 = Will this break my WooCommerce checkout? =
 
-No. The door answers a POST only when it arrives with `Content-Type: application/json`.
-WooCommerce's classic checkout, add-to-cart and coupon requests are form-encoded, so they
-fall straight through to WordPress and behave exactly as they would with this plugin
-deactivated. There is a test for it (`php tests/regression.php`).
+No. The door answers a POST only when it arrives with `Content-Type: application/json`
+AND no query string. WooCommerce's classic checkout, add-to-cart and coupon requests are
+form-encoded, and every route WordPress multiplexes over the front page — `?wc-ajax=`,
+`?wc-api=` payment webhooks, `?rest_route=` — carries a query string, so all of them fall
+straight through to WordPress and behave exactly as they would with this plugin
+deactivated. There is a test for each shape (`php tests/regression.php`).
+
+= Will this interfere with referral links, UTM tags or my analytics? =
+
+No. A visitor clicking a tagged link (`/?utm_source=...`, `/?ref=...`) arrives with GET,
+and the door never touches a GET — every GET is your site's, tags and all, so your
+analytics see exactly what they saw before.
+
+The reverse also holds: an agent's POST can never carry a query string, because an agent
+does not post to the link it was handed — it fetches your signed card first and posts to
+the card's own `url`, byte-exact, which never contains one. That is why "any query string
+means the request is not ours" is a safe rule and not a heuristic. (Attribution for agent
+visits does not ride URL tags either way: the visitor list records each caller by their
+cryptographic identity.)
 
 = What happens if I delete the plugin? =
 
@@ -130,6 +147,13 @@ The settings screen detects this and names the conflicting identity; deactivate 
 2. The agents that have visited, and how often.
 
 == Changelog ==
+
+= 0.1.2 =
+* Documentation: why the query-string rule costs nothing — tagged referral/UTM links are
+  GETs and always the site's; an agent posts to the signed card's `url` byte-exact, which
+  never carries a query. New FAQ entry, and regression pins for both behaviours (a tagged
+  GET falls through; a cache-busted card fetch serves identical bytes). No behavioural
+  change.
 
 = 0.1.1 =
 * Fix: the door no longer claims a POST that carries a query string. WordPress multiplexes

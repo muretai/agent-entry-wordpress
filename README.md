@@ -21,6 +21,13 @@ webhooks all keep working, because the door only answers a POST that arrives wit
 query-multiplexed routes like `?wc-ajax=`, `?wc-api=` and `?rest_route=` — falls straight
 through to WordPress, exactly as if this plugin were deactivated.
 
+Referral and campaign links are untouched too. A person clicking `/?utm_source=...` or
+`/?ref=...` arrives with GET, which is always your site's — tags included, so your
+analytics lose nothing. And the query-string rule costs agents nothing, because an agent
+never posts to the link it was handed: it fetches your signed card first and posts to the
+card's `url`, byte-exact, which never carries a query. The two kinds of traffic are
+disjoint by construction, not by guesswork.
+
 ## Install
 
 1. Upload the plugin and activate it. A key is generated on activation and stays on your

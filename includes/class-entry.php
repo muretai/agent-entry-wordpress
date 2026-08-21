@@ -481,7 +481,11 @@ final class Entry
             // live install. Stripe records a 200 as delivered and never retries, so every
             // payment event on such a shop would be lost SILENTLY. A door POST can never
             // carry a query string: the address an agent dials is the signed card's `url`,
-            // byte-exact, and no query ever appears in one.
+            // byte-exact, and no query ever appears in one (the visitor's card walk drops
+            // any query it was handed — verified against the reference client). Referral
+            // and campaign links (`/?utm_source=`, `/?ref=`) are unaffected by this gate
+            // for the other reason: a clicked link arrives with GET, and no GET is ever
+            // ours. The two kinds of traffic are disjoint by construction.
             if ($query !== '') {
                 return [404, [], ''];
             }

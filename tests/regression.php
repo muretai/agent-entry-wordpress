@@ -121,6 +121,21 @@ check($status === 404 && $out === '',
     'wc-ajax with its real query string falls through (both gates agree)',
     "got status {$status}");
 
+// The query gate must cost the site's OTHER traffic nothing. A clicked referral or
+// campaign link arrives with GET, and no GET is ever the door's — so tagged links reach
+// the site (and its analytics) exactly as before. And a cache-busting query on a card
+// fetch must not change the card: the GET branch never consults the query at all.
+[$status, , $out] = $entry->handle('GET', '/', [], '', 'utm_source=newsletter&ref=partner42');
+check($status === 404 && $out === '',
+    'a tracking-tagged link (GET /?utm_source=...&ref=...) falls through to the site',
+    "got status {$status}, body " . substr($out, 0, 80));
+
+[, , $plainCard] = $entry->handle('GET', '/.well-known/agent-card.json', [], '');
+[$status, , $busted] = $entry->handle('GET', '/.well-known/agent-card.json', [], '', 'v=123');
+check($status === 200 && $busted === $plainCard,
+    'a cache-busting query on the card fetch serves the identical card bytes',
+    "got status {$status}");
+
 // ...and the door must still ANSWER a real agent, or the fix broke the product.
 $sender = hex2bin(str_repeat('5c', 32));
 $fromDid = Wire::didFromSeed($sender);

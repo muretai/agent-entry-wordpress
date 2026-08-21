@@ -3,7 +3,7 @@
  * Plugin Name:       Agent Entry
  * Plugin URI:        https://github.com/muretai/agent-entry-wordpress
  * Description:       Let AI agents talk to this site directly. Publishes a signed Agent Card and answers signed messages inline — no account, no API key, no third party in the middle.
- * Version:           0.1.1
+ * Version:           0.1.2
  * Requires at least: 5.8
  * Requires PHP:      7.4
  * Author:            muretai
@@ -34,7 +34,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MURETAI_AGENT_ENTRY_VERSION', '0.1.1');
+define('MURETAI_AGENT_ENTRY_VERSION', '0.1.2');
 define('MURETAI_AGENT_ENTRY_FILE', __FILE__);
 
 require_once __DIR__ . '/includes/class-wire.php';
