@@ -393,7 +393,8 @@ final class Entry
      * @param string $body    raw request bytes.
      * @return array{0:int,1:array,2:string} [status, headers, body]
      */
-    public function handle(string $method, string $path, array $headers, string $body): array
+    public function handle(string $method, string $path, array $headers, string $body,
+                           string $query = ''): array
     {
         // A BLANKET GUARD, so a stranger always gets a status line.
         //
@@ -409,7 +410,7 @@ final class Entry
         // The fallback body is a hand-written literal, never a canonicalised structure,
         // because the whole point is that it cannot itself throw.
         try {
-            return $this->route($method, $path, $headers, $body);
+            return $this->route($method, $path, $headers, $body, $query);
         } catch (\Throwable $e) {
             return [500, ['Content-Type' => 'application/json; charset=utf-8'],
                 '{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}'];
@@ -417,7 +418,8 @@ final class Entry
     }
 
     /** The actual routing. Called only through `handle()`, which owns the guard. */
-    private function route(string $method, string $path, array $headers, string $body): array
+    private function route(string $method, string $path, array $headers, string $body,
+                           string $query): array
     {
         $method = strtoupper($method);
         $path = self::normalisePath($path);
@@ -469,6 +471,20 @@ final class Entry
             // promises. The cost is that a JSON-RPC client sending the wrong Content-Type
             // gets the site's page instead of a protocol error; the alternative cost is a
             // broken shop, and a correct client always sends `application/json`.
+            //
+            // A QUERY STRING ALSO MEANS THE POST IS NOT OURS — checked first, because the
+            // Content-Type gate alone is not enough. WordPress multiplexes whole APIs over
+            // the root path by query string, and one of them takes JSON: WooCommerce
+            // Stripe's only webhook endpoint is `/?wc-api=wc_stripe`, delivered as
+            // `application/json`. The Content-Type gate claimed it, and the door answered
+            // HTTP 200 with `{"error":{"code":-32601,...},"id":"evt_..."}` — measured on a
+            // live install. Stripe records a 200 as delivered and never retries, so every
+            // payment event on such a shop would be lost SILENTLY. A door POST can never
+            // carry a query string: the address an agent dials is the signed card's `url`,
+            // byte-exact, and no query ever appears in one.
+            if ($query !== '') {
+                return [404, [], ''];
+            }
             if (!self::looksLikeAgentMessage($headers, $body)) {
                 return [404, [], ''];
             }
@@ -550,9 +566,11 @@ final class Entry
     /**
      * Is this POST addressed to the DOOR, or is it the site's own traffic?
      *
-     * Two gates, and both are needed. The Content-Type gate is what lets WooCommerce's
-     * form-encoded AJAX through untouched; the body gate is what stops a JSON POST from
-     * some other plugin's REST-ish endpoint being answered as a malformed agent message.
+     * Two gates here, and a third — the query-string gate — upstream in `route()`. The
+     * Content-Type gate is what lets WooCommerce's form-encoded AJAX through untouched; the
+     * body gate is what stops a JSON POST from some other plugin's REST-ish endpoint being
+     * answered as a malformed agent message; the query gate is what keeps JSON webhooks
+     * multiplexed over the root path (`?wc-api=wc_stripe`) out of the door entirely.
      *
      * Deliberately CHEAP and deliberately BEFORE `handlePost`: this runs on every POST the
      * site receives, including its own, so it must not cost the site anything. The body cap
@@ -571,18 +589,23 @@ final class Entry
         if (strpos($ctype, 'application/json') === false && strpos($ctype, '+json') === false) {
             return false;
         }
-        // CONTENT-TYPE ALONE DECIDES, and the body is deliberately NOT inspected here.
+        // CONTENT-TYPE ALONE DECIDES HERE, and the body is deliberately NOT inspected.
         //
-        // A caller that sent `application/json` to this URI has said it is talking to a JSON
-        // API, and the only JSON API at the site root is this door — so we CLAIM it, and a
-        // malformed body then earns a proper -32700 instead of silently rendering the home
-        // page at a confused client. Peeking at the body first was the earlier attempt, and
-        // it turned every unparseable request into a 200 HTML page, which is the least
-        // useful answer possible for the client most likely to need a clear error.
+        // A caller that sent `application/json` to this URI — with no query string, which
+        // `route()` has already checked — has said it is talking to a JSON API, and the only
+        // query-less JSON API at the site root is this door. So we CLAIM it, and a malformed
+        // body then earns a proper -32700 instead of silently rendering the home page at a
+        // confused client. Peeking at the body first was the earlier attempt, and it turned
+        // every unparseable request into a 200 HTML page, which is the least useful answer
+        // possible for the client most likely to need a clear error.
         //
-        // The site's own traffic is unaffected: WordPress form posts are
-        // `application/x-www-form-urlencoded` or `multipart/form-data`, and a plugin with a
-        // real JSON API puts it under its own path, not the bare front page.
+        // "The only JSON API at the site root" was ONCE the claim made without the
+        // query-string qualifier, and it was wrong: WooCommerce Stripe's webhook endpoint is
+        // the site root plus `?wc-api=wc_stripe`, and it takes JSON. That is why the query
+        // gate in `route()` runs before this one and is not folded into it.
+        //
+        // The site's own form traffic is unaffected either way: WordPress form posts are
+        // `application/x-www-form-urlencoded` or `multipart/form-data`.
         return $body !== '';
     }
 

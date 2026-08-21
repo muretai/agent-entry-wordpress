@@ -15,10 +15,11 @@ POST /                                 the door — send a signed message, get a
 ```
 
 Your home page stays exactly where it is. `GET /` is still your site, and so is every POST
-your site makes to itself — WooCommerce's checkout, coupons and add-to-cart all keep
-working, because the door only answers a POST that arrives with `Content-Type:
-application/json`. Everything else falls straight through to WordPress, exactly as if this
-plugin were deactivated.
+your site makes to itself — WooCommerce's checkout, coupons, add-to-cart and payment
+webhooks all keep working, because the door only answers a POST that arrives with
+`Content-Type: application/json` **and no query string**. Everything else — including
+query-multiplexed routes like `?wc-ajax=`, `?wc-api=` and `?rest_route=` — falls straight
+through to WordPress, exactly as if this plugin were deactivated.
 
 ## Install
 

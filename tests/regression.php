@@ -94,6 +94,33 @@ check($status === 404 && $out === '', 'a multipart POST to / falls through',
 check($status === 404 && $out === '', 'a POST with no Content-Type falls through',
     "got {$status}");
 
+// JSON POSTs multiplexed over the root path BY QUERY STRING. The Content-Type gate alone
+// claimed these — measured: WooCommerce Stripe's webhook endpoint is `/?wc-api=wc_stripe`,
+// delivered as `application/json`, and the door answered it HTTP 200 / -32601 with the
+// Stripe event id echoed as the JSON-RPC id. Stripe records the 200 as delivered and never
+// retries: every payment event lost, silently. A door POST never carries a query string
+// (the dialled address is the signed card's `url`, byte-exact), so ANY query string means
+// "not ours".
+$stripeEvent = json_encode(['id' => 'evt_1', 'object' => 'event',
+    'type' => 'payment_intent.succeeded', 'data' => ['object' => ['id' => 'pi_1']]]);
+[$status, , $out] = $entry->handle('POST', '/', $JSON, $stripeEvent, 'wc-api=wc_stripe');
+check($status === 404 && $out === '',
+    'a Stripe-shaped JSON webhook (POST /?wc-api=wc_stripe) falls through to the site',
+    "got status {$status}, body " . substr($out, 0, 80));
+
+[$status, , $out] = $entry->handle('POST', '/', $JSON,
+    json_encode(['title' => 'x']), 'rest_route=/wp/v2/posts');
+check($status === 404 && $out === '',
+    'a plain-permalink REST write (POST /?rest_route=...) falls through to the site',
+    "got status {$status}, body " . substr($out, 0, 80));
+
+[$status, , $out] = $entry->handle('POST', '/',
+    ['content-type' => 'application/x-www-form-urlencoded'],
+    'product_id=42&quantity=1', 'wc-ajax=add_to_cart');
+check($status === 404 && $out === '',
+    'wc-ajax with its real query string falls through (both gates agree)',
+    "got status {$status}");
+
 // ...and the door must still ANSWER a real agent, or the fix broke the product.
 $sender = hex2bin(str_repeat('5c', 32));
 $fromDid = Wire::didFromSeed($sender);

@@ -157,7 +157,9 @@ foreach (['CONTENT_TYPE' => 'content-type', 'CONTENT_LENGTH' => 'content-length'
     }
 }
 
-[$status, $respHeaders, $respBody] = $entry->handle($method, $path, $headers, $body);
+$query = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_QUERY);
+[$status, $respHeaders, $respBody] = $entry->handle($method, $path, $headers, $body,
+    is_string($query) ? $query : '');
 
 // A path this entry does not own falls through to "the site". Under php -S there is no
 // site, so stand in for one: the front page gets a page WITH the Link signpost (which is

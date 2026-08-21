@@ -4,7 +4,7 @@ Tags: ai, agents, ai-agents, woocommerce, automation
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 0.1.0
+Stable tag: 0.1.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -130,6 +130,13 @@ The settings screen detects this and names the conflicting identity; deactivate 
 2. The agents that have visited, and how often.
 
 == Changelog ==
+
+= 0.1.1 =
+* Fix: the door no longer claims a POST that carries a query string. WordPress multiplexes
+  whole APIs over the root path by query string, and some take JSON — WooCommerce Stripe's
+  webhook endpoint (`/?wc-api=wc_stripe`) is one, and the door was answering it with an
+  HTTP 200 error, which Stripe records as delivered and never retries. Update immediately
+  if you run WooCommerce with a payment gateway that uses `?wc-api=` webhooks.
 
 = 0.1.0 =
 * First release: signed Agent Card, signed card envelope with hourly re-signing, the

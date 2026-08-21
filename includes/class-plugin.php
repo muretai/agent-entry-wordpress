@@ -268,7 +268,12 @@ final class Plugin
             }
         }
 
-        [$status, $respHeaders, $respBody] = $entry->handle($method, $path, $headers, $body);
+        // The query string rides along so the door can refuse to claim WordPress's own
+        // query-multiplexed routes (`?wc-api=`, `?wc-ajax=`, `?rest_route=`) — see the
+        // query gate in Entry::route().
+        $query = parse_url($uri, PHP_URL_QUERY);
+        [$status, $respHeaders, $respBody] = $entry->handle($method, $path, $headers, $body,
+            is_string($query) ? $query : '');
         if ($status === 404 && $respBody === '') {
             return;                       // not ours after all: leave the request alone
         }
