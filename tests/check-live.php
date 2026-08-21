@@ -309,6 +309,27 @@ if ($handshake && is_string($did)) {
     check($err($send($unsigned)['body']) === -32001, 'a missing signature is refused (-32001)');
 
     check($send([], '{not json at all')['status'] === 400, 'an unparseable body is HTTP 400');
+
+    // A QUERY STRING MEANS THE POST IS NOT THE DOOR'S — whatever the body. The door's
+    // address is the signed card's `url`, byte-exact, and no query ever appears in one,
+    // while a site's own query-multiplexed routes (`?wc-api=` payment webhooks above all)
+    // always carry one. A door that claims such a POST answers a Stripe webhook HTTP 200,
+    // the sender records the event delivered and never retries — measured before this
+    // check existed. Any answer at all is acceptable here EXCEPT a door protocol verdict.
+    $notDoor = static function (array $r): bool {
+        $d = json_decode($r['body'], true);
+        return !is_array($d) || !array_key_exists('jsonrpc', $d);
+    };
+    $q = req('POST', $base . '/?muretai-check=1',
+        json_encode(['id' => 'evt_check', 'object' => 'event']),
+        ['Content-Type' => 'application/json']);
+    check($notDoor($q), 'a JSON POST with a query string is never answered by the door',
+        "status {$q['status']}, body " . substr($q['body'], 0, 100));
+    $sq = req('POST', $base . '/?x=1', json_encode($mk('via query'), JSON_UNESCAPED_UNICODE),
+        ['Content-Type' => 'application/json']);
+    check($notDoor($sq),
+        'even a correctly signed message is not the door\'s when a query string rides along',
+        "status {$sq['status']}, body " . substr($sq['body'], 0, 100));
 }
 
 echo str_repeat('-', 60) . "\n";
