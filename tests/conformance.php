@@ -19,6 +19,14 @@
 
 declare(strict_types=1);
 
+// COMMAND LINE ONLY. These files ship inside the plugin directory, which means they sit
+// under the webroot on a normal install — so without this a stranger could execute them by
+// URL. `php_sapi_name()` is the check that cannot be spoofed by a request.
+if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'cli-server') {
+    http_response_code(404);
+    exit;
+}
+
 define('MURETAI_AGENT_ENTRY_STANDALONE', true);
 require_once __DIR__ . '/../includes/class-wire.php';
 

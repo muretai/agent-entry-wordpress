@@ -101,15 +101,22 @@ final class WpdbStore implements Store
     {
         $now = time();
         $t = $this->replayTable();
+        // HASHED, NOT STORED RAW. `message_id` is varchar(191) and `$messageId` comes from
+        // a stranger with no length bound, so MySQL would silently TRUNCATE it — and then
+        // two different ids sharing a 191-character prefix become one row, while the DELETE
+        // below (which used the untruncated value) would never match what was inserted.
+        // A fixed-width hash removes both problems at once. It is a REPLAY guard, so a
+        // collision could only ever refuse a message, never admit one.
+        $key = hash('sha256', $messageId);
         // Step 1: this id, but only if it has already expired.
         $this->db->query($this->db->prepare(
-            "DELETE FROM {$t} WHERE message_id = %s AND expires <= %d", $messageId, $now
+            "DELETE FROM {$t} WHERE message_id = %s AND expires <= %d", $key, $now
         ));
         // Step 2: the atomic test-and-set. INSERT IGNORE turns the duplicate-key error
         // into "0 rows affected", which is exactly the answer we want.
         $this->db->query($this->db->prepare(
             "INSERT IGNORE INTO {$t} (message_id, expires) VALUES (%s, %d)",
-            $messageId, $now + $ttl
+            $key, $now + $ttl
         ));
         return (int) $this->db->rows_affected === 1;
     }

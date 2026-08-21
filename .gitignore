@@ -5,3 +5,6 @@ state.json
 agent-entry-state.json
 .DS_Store
 vendor/
+.env
+.env.*
+wp-config.php

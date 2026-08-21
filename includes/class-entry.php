@@ -361,6 +361,30 @@ final class Entry
      */
     public function handle(string $method, string $path, array $headers, string $body): array
     {
+        // A BLANKET GUARD, so a stranger always gets a status line.
+        //
+        // Everything below is written to refuse rather than throw, but "written to" is not
+        // "proved to": this runs inside WordPress on an `init` hook with no try around it,
+        // so ONE escaping exception is a WP fatal — an HTTP 500, a stack trace wherever
+        // WP_DEBUG_DISPLAY is on, and an error-log line carrying absolute server paths, all
+        // from an unauthenticated POST. Two such throws were found by audit before this
+        // plugin was ever published (a byte-truncation landing mid-UTF-8, and a JSON-RPC
+        // `id` the canonicaliser refuses); both are fixed at their source above, and this
+        // exists for the third one nobody has found yet.
+        //
+        // The fallback body is a hand-written literal, never a canonicalised structure,
+        // because the whole point is that it cannot itself throw.
+        try {
+            return $this->route($method, $path, $headers, $body);
+        } catch (\Throwable $e) {
+            return [500, ['Content-Type' => 'application/json; charset=utf-8'],
+                '{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}'];
+        }
+    }
+
+    /** The actual routing. Called only through `handle()`, which owns the guard. */
+    private function route(string $method, string $path, array $headers, string $body): array
+    {
         $method = strtoupper($method);
         $path = self::normalisePath($path);
         $allow = $this->allowFor($path);
@@ -395,6 +419,25 @@ final class Entry
                 // exists to someone who only guessed at it.
                 return $this->json(404, ['error' => 'not found']);
             }
+            // THE DOOR SHARES ITS URI WITH THE SITE, AND THE SITE POSTS THERE TOO.
+            //
+            // The method split gives `GET /` to the site and `POST /` to the door, which is
+            // correct for a site whose only POSTs are agent messages — and wrong for almost
+            // every real WordPress site. WooCommerce's classic checkout is the case that
+            // matters: `POST /?wc-ajax=add_to_cart` has the path `/`, so it lands here, and
+            // a form-encoded body is not JSON. Answering it at all — even with a polite 400 —
+            // breaks add-to-cart, coupons, order review and checkout on exactly the shops
+            // this plugin is for.
+            //
+            // So the door claims a POST only when the caller has SAID it is one of ours.
+            // Anything else gets the fall-through sentinel and WordPress handles the request
+            // exactly as it would with this plugin deactivated, which is what the README
+            // promises. The cost is that a JSON-RPC client sending the wrong Content-Type
+            // gets the site's page instead of a protocol error; the alternative cost is a
+            // broken shop, and a correct client always sends `application/json`.
+            if (!self::looksLikeAgentMessage($headers, $body)) {
+                return [404, [], ''];
+            }
             return $this->handlePost($headers, $body);
         }
 
@@ -405,6 +448,108 @@ final class Entry
                 Wire::jsonBytes(['error' => 'method not allowed'])];
         }
         return $this->json(404, ['error' => 'not found']);
+    }
+
+    /**
+     * The JSON-RPC `id` we are willing to ECHO, or null.
+     *
+     * The id is the one value a stranger controls that we copy straight back into a
+     * response, and this response is canonicalised — so a value the canonicaliser refuses
+     * turns into an uncaught throw and an HTTP 500 at the METHOD-CHECK rung, before any
+     * signature is examined. `{"id": 1.0}`, `{"id": 1e20}`, `{"id": 0.00001}` and
+     * `{"id": 9223372036854775807}` all do it: PHP ints run to 64 bits while this wire
+     * stops at ±(2**53−1), and every whole-valued float is refused because Python, PHP and
+     * JavaScript spell it three different ways.
+     *
+     * Worse on the SUCCESS path: the ladder would already have booked the account and burnt
+     * the messageId before serialisation failed, so the sender gets no reply and their retry
+     * earns −32002.
+     *
+     * Both sibling implementations already carry this guard (`safeId` in the JS twin,
+     * `_safe_id` in the Python one) with the same failure recorded as measured. This is the
+     * PHP twin catching up, not a new idea.
+     *
+     * @param mixed $id
+     * @return string|int|null
+     */
+    private static function safeId($id)
+    {
+        if (is_string($id)) {
+            // A string id is echoed, but it is still a stranger's bytes: cap it, and make
+            // sure the cap cannot land mid-character (see truncateUtf8).
+            return self::truncateUtf8($id, 256);
+        }
+        if (is_int($id) && $id <= Wire::MAX_SAFE_INT && $id >= -Wire::MAX_SAFE_INT) {
+            return $id;
+        }
+        // Floats, out-of-range integers, booleans, arrays, objects: JSON-RPC allows a null
+        // id, so answering with one is correct rather than merely safe.
+        return null;
+    }
+
+    /**
+     * Truncate to at most `$max` BYTES without splitting a UTF-8 character.
+     *
+     * `substr()` counts bytes, so truncating attacker-controlled text mid-character leaves
+     * a lone lead byte. That string then reaches the canonicaliser, which refuses invalid
+     * UTF-8 by design — and the refusal is an exception on the error path, i.e. an
+     * unauthenticated remote HTTP 500 from a ~90-byte POST. The door's own contract says a
+     * protocol verdict is HTTP 200 and that junk costs the recipient nothing; this keeps
+     * that true.
+     */
+    private static function truncateUtf8(string $s, int $max): string
+    {
+        if (strlen($s) <= $max) {
+            return $s;
+        }
+        $cut = substr($s, 0, $max);
+        // Drop any trailing bytes that form an incomplete sequence. At most 3 can.
+        for ($i = 0; $i < 4 && $cut !== ''; $i++) {
+            if (preg_match('//u', $cut)) {
+                return $cut;
+            }
+            $cut = substr($cut, 0, -1);
+        }
+        return $cut;
+    }
+
+    /**
+     * Is this POST addressed to the DOOR, or is it the site's own traffic?
+     *
+     * Two gates, and both are needed. The Content-Type gate is what lets WooCommerce's
+     * form-encoded AJAX through untouched; the body gate is what stops a JSON POST from
+     * some other plugin's REST-ish endpoint being answered as a malformed agent message.
+     *
+     * Deliberately CHEAP and deliberately BEFORE `handlePost`: this runs on every POST the
+     * site receives, including its own, so it must not cost the site anything. The body cap
+     * is re-checked inside `handlePost` — this pre-scan only refuses to CLAIM the request.
+     */
+    private static function looksLikeAgentMessage(array $headers, string $body): bool
+    {
+        $ctype = '';
+        foreach ($headers as $k => $v) {
+            if (strtolower($k) === 'content-type') {
+                $ctype = strtolower((string) $v);
+                break;
+            }
+        }
+        // `application/json`, plus its `+json` suffix forms and any `; charset=` parameter.
+        if (strpos($ctype, 'application/json') === false && strpos($ctype, '+json') === false) {
+            return false;
+        }
+        // CONTENT-TYPE ALONE DECIDES, and the body is deliberately NOT inspected here.
+        //
+        // A caller that sent `application/json` to this URI has said it is talking to a JSON
+        // API, and the only JSON API at the site root is this door — so we CLAIM it, and a
+        // malformed body then earns a proper -32700 instead of silently rendering the home
+        // page at a confused client. Peeking at the body first was the earlier attempt, and
+        // it turned every unparseable request into a 200 HTML page, which is the least
+        // useful answer possible for the client most likely to need a clear error.
+        //
+        // The site's own traffic is unaffected: WordPress form posts are
+        // `application/x-www-form-urlencoded` or `multipart/form-data`, and a plugin with a
+        // real JSON API puts it under its own path, not the bare front page.
+        return $body !== '';
     }
 
     private function bytes(int $status, string $body, string $method, ?string $allow): array
@@ -477,16 +622,14 @@ final class Entry
                     'error' => ['code' => self::E_PARSE, 'message' => 'Parse error'],
                 ])];
         }
-        $id = $req['id'] ?? null;
-        if (is_array($id)) {
-            $id = null;
-        }
+        $id = self::safeId($req['id'] ?? null);
 
         // 3. the method.
         $method = $req['method'] ?? null;
         if ($method !== 'message/send') {
             return $this->rpcError($id, self::E_METHOD_NOT_FOUND,
-                'Method not found: ' . (is_string($method) ? substr($method, 0, 48) : 'none'));
+                'Method not found: ' . (is_string($method)
+                    ? self::truncateUtf8($method, 48) : 'none'));
         }
 
         // 4. the params/message shape.
@@ -527,7 +670,7 @@ final class Entry
         //    misaddressed message never reaches the base58 decoder.
         if ($to !== $this->did) {
             return $this->rpcError($id, self::E_WRONG_RECIPIENT,
-                'not addressed to me: ' . substr($to, 0, 24));
+                'not addressed to me: ' . self::truncateUtf8($to, 24));
         }
 
         // 8. an INTEGER epoch inside the clock window, in BOTH directions: a future
@@ -592,7 +735,7 @@ final class Entry
 
         $replyText = is_array($answer) ? (string) ($answer['text'] ?? '') : (string) $answer;
         if (strlen($replyText) > Wire::MAX_TEXT_BYTES) {
-            $replyText = substr($replyText, 0, Wire::MAX_TEXT_BYTES);
+            $replyText = self::truncateUtf8($replyText, Wire::MAX_TEXT_BYTES);
         }
 
         return $this->json(200, [

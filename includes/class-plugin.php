@@ -255,6 +255,18 @@ final class Plugin
                 $headers[strtolower(str_replace('_', '-', substr($k, 5)))] = (string) $v;
             }
         }
+        // CONTENT_TYPE AND CONTENT_LENGTH ARE NOT PREFIXED. PHP (following CGI) puts them in
+        // $_SERVER WITHOUT the `HTTP_` prefix, so the loop above — which is the obvious way
+        // to write this — silently drops the one header the door uses to tell an agent
+        // message apart from the site's own form POSTs. Missing them meant the door fell
+        // through on EVERY request and answered nobody, while every unit test passed because
+        // those call handle() with headers already assembled. Found by running a live check
+        // against a real install, which is the only place this is visible.
+        foreach (['CONTENT_TYPE' => 'content-type', 'CONTENT_LENGTH' => 'content-length'] as $k => $name) {
+            if (isset($_SERVER[$k]) && $_SERVER[$k] !== '') {
+                $headers[$name] = (string) $_SERVER[$k];
+            }
+        }
 
         [$status, $respHeaders, $respBody] = $entry->handle($method, $path, $headers, $body);
         if ($status === 404 && $respBody === '') {
@@ -347,6 +359,25 @@ final class Plugin
         register_setting('muretai_agent_entry', self::OPT_NAME);
         register_setting('muretai_agent_entry', self::OPT_DESCRIPTION);
         register_setting('muretai_agent_entry', self::OPT_REPLY);
+
+        // THE PLAIN CARD AND THE SIGNED CARD MUST AGREE, ALWAYS.
+        //
+        // The plain card is built fresh on every request while the signed envelope is
+        // cached for an hour, so renaming the site in this screen would leave a visitor
+        // fetching a new name and a signature over the old one — the two documents
+        // disagreeing for up to an hour, which reads exactly like tampering. Anything that
+        // changes the card's CONTENT therefore drops the cached envelope, and the next
+        // request re-mints it.
+        foreach ([self::OPT_NAME, self::OPT_DESCRIPTION] as $opt) {
+            add_action("update_option_{$opt}", [$this, 'invalidateCardEnvelope'], 10, 0);
+        }
+    }
+
+    /** Drop the cached signed card so the next request re-mints it over the new content. */
+    public function invalidateCardEnvelope(): void
+    {
+        delete_option('muretai_agent_entry_card_envelope');
+        $this->entry = null;
     }
 
     /**
@@ -430,7 +461,11 @@ final class Plugin
     private function renderHealth(Entry $entry, string $cardUrl): void
     {
         echo '<h2>Is it working?</h2>';
-        $res = wp_remote_get($cardUrl, ['timeout' => 5, 'sslverify' => false]);
+        // `sslverify` is deliberately LEFT ALONE (i.e. verification stays on). Turning it
+        // off to make a self-signed staging cert stop complaining would teach the plugin to
+        // accept any certificate for its own identity check, which is the one request that
+        // most needs to be talking to the real site.
+        $res = wp_remote_get($cardUrl, ['timeout' => 5]);
         if (is_wp_error($res)) {
             printf('<div class="notice notice-warning inline"><p>Could not fetch the card '
                 . 'from this server (%s). This is often a loopback restriction on the host '

@@ -23,7 +23,9 @@ never sent anywhere) and four routes:
 * `/.well-known/agent-card.sig.json` — proof that this key owns this domain
 * `POST /` — the door: send a signed message, get a signed reply
 
-Your home page is untouched. `GET /` is still your site; only `POST /` is the door.
+Your home page is untouched, and so is your checkout: the door answers a POST only when it
+carries `Content-Type: application/json`, so WooCommerce's form-encoded AJAX falls straight
+through to WordPress.
 
 **Every visitor gets an account, with no signup.** The first signed message from a
 stranger *is* their account, because they already proved control of a key — more than an
@@ -92,9 +94,30 @@ agents.
 = How do I check it actually works? =
 
 The settings screen fetches your own card over HTTP and confirms the card served at that
-URL is really yours — which also catches another plugin claiming the same path. For an
-independent check, run `receptor_check.py` from the muretai core repository against your
-URL.
+URL is really yours — which also catches another plugin claiming the same path.
+
+For a full check, the plugin ships one: run `php tests/check-live.php --handshake
+https://your-site.example` from the plugin directory. It verifies the card and its
+signature, the CORS and method rules, that your site's own form posts still reach the site,
+and — with `--handshake` — that a real signed message earns a correctly signed reply and
+every forged one is refused.
+
+= Will this break my WooCommerce checkout? =
+
+No. The door answers a POST only when it arrives with `Content-Type: application/json`.
+WooCommerce's classic checkout, add-to-cart and coupon requests are form-encoded, so they
+fall straight through to WordPress and behave exactly as they would with this plugin
+deactivated. There is a test for it (`php tests/regression.php`).
+
+= What happens if I delete the plugin? =
+
+Deactivating keeps everything, because your site's identity has to survive being switched
+off and on again — deleting the key there would silently give your site a NEW identity, and
+every agent that recorded the old one would be talking to a stranger.
+
+DELETING the plugin removes it all: the key, the visitor list, the plugin's tables and its
+settings. That is deliberate — leaving a private key in the database of a site that removed
+the plugin is a liability you did not agree to keep.
 
 = Another AI plugin also serves an agent card. =
 

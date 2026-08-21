@@ -137,9 +137,17 @@ final class WooCommerce
             }
             $words[] = $w;
         }
-        // More than a handful of words is a sentence, not a query; the first few carry the
-        // subject in practice.
-        return implode(' ', array_slice($words, 0, 6));
+        // BOUND WHAT A STRANGER CAN MAKE THE DATABASE DO. `s` becomes an unindexed LIKE
+        // over wp_posts, and this door answers anyone who can sign a message — which is
+        // anyone, since a did:key is free to mint. So the search term is capped in BOTH
+        // directions: at most 6 words and 64 characters (a longer LIKE is slower and no
+        // more useful), and at least 3 characters, because a one- or two-character LIKE
+        // matches most of a catalogue and is pure cost.
+        $terms = implode(' ', array_slice($words, 0, 6));
+        if (strlen($terms) > 64) {
+            $terms = rtrim(substr($terms, 0, 64));
+        }
+        return strlen($terms) < 3 ? '' : $terms;
     }
 
     /**

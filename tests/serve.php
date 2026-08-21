@@ -3,7 +3,7 @@
  * tests/serve.php — run the PHP door under PHP's built-in server, with no WordPress.
  *
  * This exists so the door can be judged the way a stranger judges it: over HTTP, by
- * `tools/receptor_check.py`, before any CMS is involved. If the contract is wrong it is
+ * `tests/check-live.php`, before any CMS is involved. If the contract is wrong it is
  * wrong here, and finding that out does not require a database.
  *
  *     AGENT_ENTRY_SEED_HEX=<64 hex> AGENT_ENTRY_BASE_URL=http://127.0.0.1:8099 \
@@ -14,6 +14,14 @@
  */
 
 declare(strict_types=1);
+
+// COMMAND LINE ONLY. These files ship inside the plugin directory, which means they sit
+// under the webroot on a normal install — so without this a stranger could execute them by
+// URL. `php_sapi_name()` is the check that cannot be spoofed by a request.
+if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'cli-server') {
+    http_response_code(404);
+    exit;
+}
 
 define('MURETAI_AGENT_ENTRY_STANDALONE', true);
 require_once __DIR__ . '/../includes/class-wire.php';
@@ -138,6 +146,14 @@ $headers = [];
 foreach ($_SERVER as $k => $v) {
     if (strncmp($k, 'HTTP_', 5) === 0) {
         $headers[strtolower(str_replace('_', '-', substr($k, 5)))] = $v;
+    }
+}
+// Not `HTTP_`-prefixed: PHP follows CGI and puts these two in $_SERVER bare. The door reads
+// content-type to tell an agent message from the site's own form POSTs, so dropping it here
+// makes the door answer nobody.
+foreach (['CONTENT_TYPE' => 'content-type', 'CONTENT_LENGTH' => 'content-length'] as $k => $name) {
+    if (isset($_SERVER[$k]) && $_SERVER[$k] !== '') {
+        $headers[$name] = (string) $_SERVER[$k];
     }
 }
 
