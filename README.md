@@ -60,6 +60,43 @@ Note what is **not** here: a model call. A plugin that reached for an LLM on eve
 message would hand a stranger your API bill. If you want a generated answer, call your own
 model inside this filter, where you decide the budget.
 
+## WooCommerce: your catalogue becomes answerable
+
+With WooCommerce active, the site advertises a `product-search` skill on its card and
+answers catalogue questions from your own products — no extra setup:
+
+```
+Agent: Do you have any blue running shoes?
+
+Site:  1 product matching "blue running shoes" at Example Studio:
+
+       - Blue Running Shoes
+         price: 89.50 USD
+         in stock: yes
+         about: Lightweight road runners in cobalt blue.
+         url: https://shop.example/?product=blue-running-shoes
+```
+
+Signed by your site, in one request, to an agent with no account.
+
+**What an agent can see** is exactly what a shopper already sees on your pages: published,
+catalogue-visible products only — name, price, stock, short description, URL. Drafts,
+private and password-protected products, customer data and orders are never reachable
+through the door, which is unauthenticated by design.
+
+WooCommerce's own MCP endpoint is a different thing for a different audience: it needs a
+REST consumer key and `manage_woocommerce`, so it serves *your* tooling. This serves a
+stranger's shopping agent.
+
+To change what gets searched:
+
+```php
+add_filter( 'muretai_agent_entry_product_query', function ( $args, $terms ) {
+    $args['category'] = [ 'in-stock-now' ];
+    return $args;
+}, 10, 2 );
+```
+
 ## Every visitor gets an account, without signing up
 
 The first signed message from a stranger **is** their account. There is no signup form to

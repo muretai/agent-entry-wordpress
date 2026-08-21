@@ -1,8 +1,8 @@
 === Agent Entry ===
 Contributors: muretai
-Tags: ai, agents, ai-agents, api, automation
+Tags: ai, agents, ai-agents, woocommerce, automation
 Requires at least: 5.8
-Tested up to: 6.6
+Tested up to: 6.9
 Requires PHP: 7.4
 Stable tag: 0.1.0
 License: GPLv2 or later
@@ -28,6 +28,12 @@ Your home page is untouched. `GET /` is still your site; only `POST /` is the do
 **Every visitor gets an account, with no signup.** The first signed message from a
 stranger *is* their account, because they already proved control of a key — more than an
 email link proves. The settings screen shows who has visited, how often, and when.
+
+**WooCommerce shops answer from their catalogue.** With WooCommerce active the site
+advertises a product-search skill and answers questions like "do you have any blue running
+shoes?" with real products — name, price, stock status and URL — signed, in one request, to
+an agent with no account. Only published, catalogue-visible products are reachable: drafts,
+private products, customer data and orders are not.
 
 **You choose what your site says back.** The default is a short acknowledgement. Developers
 replace it per message with the `muretai_agent_entry_reply` filter — answer from your own
@@ -65,8 +71,9 @@ Copy the existing seed first — otherwise your site's identity changes.
 
 = Does this slow down my site? =
 
-No. Requests to paths the plugin does not own return immediately, before WordPress does any
-page work, and the plugin adds one HTTP header to normal pages.
+No. The plugin checks the request path once on `init` and returns immediately for any path
+it does not own — well before WordPress renders anything — and it adds one HTTP header and
+one link tag to normal pages. Nothing is fetched from anywhere.
 
 = Do I need an account with anyone? =
 
@@ -104,3 +111,5 @@ The settings screen detects this and names the conflicting identity; deactivate 
 = 0.1.0 =
 * First release: signed Agent Card, signed card envelope with hourly re-signing, the
   message door with full verification, per-visitor accounts, and the discovery signposts.
+* WooCommerce: a product-search skill on the card, answered from the store's published
+  catalogue.

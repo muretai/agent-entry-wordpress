@@ -41,6 +41,7 @@ require_once __DIR__ . '/includes/class-wire.php';
 require_once __DIR__ . '/includes/class-store.php';
 require_once __DIR__ . '/includes/class-entry.php';
 require_once __DIR__ . '/includes/class-wpdb-store.php';
+require_once __DIR__ . '/includes/class-woocommerce.php';
 require_once __DIR__ . '/includes/class-plugin.php';
 
 /**

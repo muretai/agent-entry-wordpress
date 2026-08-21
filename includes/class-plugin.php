@@ -63,9 +63,18 @@ final class Plugin
 
     private function __construct()
     {
-        // Priority 0: answer before anything else has a chance to emit output. A path we
-        // do not own returns immediately and costs the site nothing.
-        add_action('plugins_loaded', [$this, 'maybeAnswer'], 0);
+        // `init`, not `plugins_loaded`. Answering as early as possible is tempting — and
+        // it was the first thing tried — but `plugins_loaded` is too early to ASK OTHER
+        // PLUGINS ANYTHING. WooCommerce's class exists by then, so the card correctly
+        // advertised a catalogue skill, while `wc_get_products()` quietly returned nothing
+        // because its data stores are not registered until WooCommerce's own `init`. The
+        // door therefore answered "a human will read it" to a perfectly good shopping
+        // question, and every layer looked healthy.
+        //
+        // `init` is still long before any output (`template_redirect` and rendering come
+        // later), so nothing is lost but a few microseconds on requests we do not own —
+        // and those still return on the first line of maybeAnswer().
+        add_action('init', [$this, 'maybeAnswer'], 20);
         add_action('send_headers', [$this, 'sendLinkHeader']);
         add_action('wp_head', [$this, 'printLinkTag']);
         add_action(self::CRON_HOOK, [$this, 'cronResign']);
@@ -157,6 +166,9 @@ final class Plugin
             'description' => (string) get_option(self::OPT_DESCRIPTION, get_bloginfo('description')),
             'store' => $this->store(),
             'responder' => [$this, 'respond'],
+            // A skill is a PROMISE. WooCommerce::skills() returns none when WooCommerce is
+            // inactive, so the card never advertises a catalogue the door cannot search.
+            'skills' => WooCommerce::skills(),
         ]);
         return $this->entry;
     }
@@ -187,6 +199,13 @@ final class Plugin
         if ($default === '') {
             $default = 'Thanks for your message. It reached '
                 . get_bloginfo('name') . ' and a human will read it.';
+        }
+        // The catalogue answers first when it can, and returns null when the question was
+        // not a shopping question — answering "no products matched" to "what are your
+        // opening hours?" is worse than not answering at all.
+        $catalogue = WooCommerce::answer($env);
+        if (is_string($catalogue) && $catalogue !== '') {
+            $default = $catalogue;
         }
         /**
          * Filter the reply this site sends an agent.
