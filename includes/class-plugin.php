@@ -53,6 +53,9 @@ final class Plugin
     /** @var WpdbStore|null */
     private $store = null;
 
+    /** @var bool body `<a>` printed this request (wp_body_open and wp_footer both fire) */
+    private $bodySignpostPrinted = false;
+
     public static function boot(): Plugin
     {
         if (self::$instance === null) {
@@ -77,6 +80,12 @@ final class Plugin
         add_action('init', [$this, 'maybeAnswer'], 20);
         add_action('send_headers', [$this, 'sendLinkHeader']);
         add_action('wp_head', [$this, 'printLinkTag']);
+        // The body `<a>` is the spelling a snapshot / ARIA / `a[href]` client can still
+        // see — Camofox's shape. `wp_body_open` is the right place (WP 5.2+; this plugin
+        // requires 5.8). Themes that never call it still get the link in `wp_footer`,
+        // which is also in `<body>`. Printed at most once per request.
+        add_action('wp_body_open', [$this, 'printBodySignpost']);
+        add_action('wp_footer', [$this, 'printBodySignpost']);
         add_action(self::CRON_HOOK, [$this, 'cronResign']);
         add_action('admin_menu', [$this, 'adminMenu']);
         add_action('admin_init', [$this, 'registerSettings']);
@@ -298,9 +307,11 @@ final class Plugin
     /**
      * The `Link` header, on every page the site serves.
      *
-     * Header and HTML tag both exist because each is blind where the other sees: a client
-     * that only issues HEAD never parses HTML, and a client that renders a page may never
-     * look at the headers. Shipping one is a coin flip on which kind of caller arrived.
+     * Header, HTML `<link>` tag, and in-body `<a>` all exist because each is blind where
+     * the others see: a client that only issues HEAD never parses HTML; a client that
+     * fetches the page body and nothing else never looks at headers; a snapshot / ARIA /
+     * `a[href]` client (Camofox's shape) sees neither the header nor `<head>`. Shipping
+     * two of the three is a coin flip on which kind of caller arrived.
      */
     public function sendLinkHeader(): void
     {
@@ -322,6 +333,35 @@ final class Plugin
             esc_attr(Entry::LINK_REL),
             esc_url(home_url('/.well-known/agent-card.json'))
         );
+    }
+
+    /**
+     * The in-body `<a>` a snapshot client can still follow.
+     *
+     * Same relation as the header and the `<head>` tag. Visible on purpose: a fetch that
+     * converts the page to markdown, or an accessibility dump that only lists `a[href]`,
+     * keeps this and drops the other two. Matches `bodySignpost()` in the JS library.
+     */
+    public function printBodySignpost(): void
+    {
+        if ($this->bodySignpostPrinted) {
+            return;
+        }
+        if (function_exists('is_admin') && is_admin()) {
+            return;
+        }
+        $entry = $this->entry();
+        if ($entry === null) {
+            return;
+        }
+        $href = home_url('/.well-known/agent-card.json');
+        printf(
+            '<a href="%s" rel="%s">This site answers agents at %s</a>' . "\n",
+            esc_url($href),
+            esc_attr(Entry::LINK_REL),
+            esc_html($href)
+        );
+        $this->bodySignpostPrinted = true;
     }
 
     // ---------------------------------------------------------------- cron

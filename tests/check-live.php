@@ -229,6 +229,12 @@ if ($front['status'] === 200) {
         info('advisory: no Link signpost on GET / (an agent handed only your domain has to '
             . 'guess). Link: ' . ($link !== '' ? $link : '(absent)'));
     }
+    if (strpos($front['body'], 'muretai.net/rel/agent-entry') !== false) {
+        check(true, 'the front page carries the body <a> door signpost');
+    } else {
+        info('advisory: no body <a> signpost on GET / (a snapshot client never sees the '
+            . 'header or the <head> tag).');
+    }
 } else {
     info('GET / -> ' . var_export($front['status'], true)
         . '; the signpost belongs on a page your site actually serves');

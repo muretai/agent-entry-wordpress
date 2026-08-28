@@ -4,7 +4,7 @@ Tags: ai, agents, ai-agents, woocommerce, automation
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 0.1.2
+Stable tag: 0.1.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -147,6 +147,13 @@ The settings screen detects this and names the conflicting identity; deactivate 
 2. The agents that have visited, and how often.
 
 == Changelog ==
+
+= 0.1.3 =
+* Discovery: the door pointer is now also an in-body `<a rel="https://muretai.net/rel/agent-entry">`,
+  so a snapshot / ARIA / `a[href]` client (the shape a stealth agent browser uses) can still
+  find the card. The HTTP `Link` header and the `<head>` tag were already there; those vanish
+  in that view. Hooked on `wp_body_open`, with `wp_footer` as a fallback for themes that never
+  call it. No change to verification, accounts, or refusals.
 
 = 0.1.2 =
 * Documentation: why the query-string rule costs nothing — tagged referral/UTM links are

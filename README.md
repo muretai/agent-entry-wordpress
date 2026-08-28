@@ -37,6 +37,12 @@ disjoint by construction, not by guesswork.
 
 That is the whole setup. There is nothing to register and no account to create.
 
+The plugin also publishes the door pointer in three spellings on every public page: the
+HTTP `Link` header, a `<link>` in `<head>`, and an in-body `<a
+rel="https://muretai.net/rel/agent-entry">`. A visiting agent that only reads the page
+body, or a snapshot client that only lists `a[href]`, still finds the card. You do not add
+these by hand.
+
 ### Keep the key out of your database (recommended)
 
 By default the key lives in the `wp_options` table, which means it travels in every

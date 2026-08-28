@@ -169,9 +169,15 @@ if ($status === 404 && $respBody === '' && ($method === 'GET' || $method === 'HE
         header('Content-Type: text/html; charset=utf-8');
         header('Link: ' . $entry->linkHeaderValue());
         http_response_code(200);
-        echo "<!doctype html><html><head><title>Example Studio</title></head><body>\n";
+        echo "<!doctype html><html><head><title>Example Studio</title>\n";
+        echo '<link rel="' . htmlspecialchars(Entry::LINK_REL, ENT_QUOTES)
+            . '" href="/.well-known/agent-card.json">'."\n";
+        echo "</head><body>\n";
         echo "<p>Example Studio. An agent can talk to this site directly: fetch\n";
         echo "<code>/.well-known/agent-card.json</code> and POST a signed message to <code>/</code>.</p>\n";
+        echo '<a href="/.well-known/agent-card.json" rel="'
+            . htmlspecialchars(Entry::LINK_REL, ENT_QUOTES)
+            . '">This site answers agents at /.well-known/agent-card.json</a>'."\n";
         echo "</body></html>\n";
         exit;
     }
