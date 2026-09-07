@@ -5,12 +5,13 @@
  * `conformance.php` proves this implementation agrees with the fixtures. That is not the
  * same as proving it agrees with the OTHER implementations: a shared misreading of the
  * spec would satisfy both. So this script signs a few messages and a card envelope and
- * prints them as JSON, for core's Python verifier to accept or reject. The non-ASCII case
+ * prints them as JSON, for the Python reference in agent-seam (`python/shared/`, whose
+ * home is https://github.com/muretai/agent-seam) to accept or reject. The non-ASCII case
  * matters most — literal UTF-8 in the signed bytes is the rule most implementations break,
  * and message text on this network is routinely non-ASCII.
  *
  *     php tests/emit_for_python.php > /tmp/php_emitted.json
- *     # then, in the core repo, verify with shared.crypto + shared.cardpub
+ *     # then, in an agent-seam checkout, verify with python/shared/crypto.py + cardpub.py
  */
 
 declare(strict_types=1);

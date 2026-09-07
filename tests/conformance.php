@@ -2,8 +2,10 @@
 /**
  * tests/conformance.php — does the PHP twin produce THE SAME BYTES as the other two?
  *
- * The golden vectors in `wire_vectors.json` are generated from core Python and already
- * hold the Node twin byte for byte. A third implementation is only worth shipping if it
+ * The golden vectors are agent-seam's vectors/wire_vectors.json, vendored here as
+ * `tests/wire_vectors.json` at the commit in tests/VENDOR.json (tests/check_vendor.php
+ * holds the copy to that pin). They already hold the JavaScript door and the Python
+ * reference byte for byte. A third implementation is only worth shipping if it
  * reproduces them exactly, so this runner is the first gate: no WordPress, no HTTP, no
  * network — just bytes in, bytes out, compared to the fixture.
  *

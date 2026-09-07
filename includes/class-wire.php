@@ -4,12 +4,14 @@
  *
  * WHY THIS FILE EXISTS SEPARATELY FROM WORDPRESS. Everything here is pure PHP with no
  * WordPress symbol in sight, because these are the bytes two other implementations
- * already agreed on (`web/agent-entry/muretai-agent-entry.mjs` in Node,
- * `examples/agent_entry_reference.py` in stdlib Python). A third implementation earns
+ * already agreed on: the JavaScript door `muretai-agent-entry.mjs` in the agent-entry
+ * repository, and the Python reference `python/shared/` in agent-seam — the same bytes,
+ * whose home is https://github.com/muretai/agent-seam. A third implementation earns
  * nothing by being clever: it must produce THE SAME BYTES or the signature it makes is
  * worthless to every existing verifier. Keeping this file WordPress-free means it can be
  * tested in a bare `php -f` run against the same golden vectors the other two are held
- * to, without booting a CMS.
+ * to (vendored here as tests/wire_vectors.json, pinned by tests/VENDOR.json), without
+ * booting a CMS.
  *
  * The four things that are easy to get wrong, and are therefore stated here once:
  *

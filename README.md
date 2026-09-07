@@ -165,8 +165,10 @@ a file on your server brings agent traffic is selling something.
 
 ## For developers: the wire contract
 
-This is a third implementation of a contract two others already speak (Node and Python).
-It is not a new protocol and it does not get to invent bytes:
+This is a third implementation of a contract two others already speak: the JavaScript door
+`muretai-agent-entry.mjs` in [agent-entry](https://github.com/muretai/agent-entry) and the
+Python reference `python/shared/` in [agent-seam](https://github.com/muretai/agent-seam), the
+seam's home. It is not a new protocol and it does not get to invent bytes:
 
 - **Signature**: Ed25519 over canonical JSON of exactly six fields — `contextId`, `from`,
   `messageId`, `text`, `timestamp`, `to`.
@@ -180,22 +182,40 @@ It is not a new protocol and it does not get to invent bytes:
 
 ### Verifying it yourself
 
-Three checks, all of which ship here:
+Four checks, all of which ship here:
 
 ```bash
-# 1. the bytes match the golden vectors the other implementations are held to
+# 1. the vendored golden vectors are still the bytes the pin records
+php tests/check_vendor.php
+
+# 2. the bytes match the golden vectors the other implementations are held to
 php tests/conformance.php tests/wire_vectors.json
 
-# 2. the bugs found before release stay fixed
+# 3. the bugs found before release stay fixed
 php tests/regression.php
 
-# 3. a LIVE site obeys the contract, asked over HTTP
+# 4. a LIVE site obeys the contract, asked over HTTP
 php tests/check-live.php --handshake https://your-site.example
 ```
 
-All three ship in this repo and need no account, no dependency and nothing to obtain.
+All four ship in this repo and need no account, no dependency and nothing to obtain.
 `check-live.php` is read-only without `--handshake`; with it, it sends a real signed message
 and the full battery of refusals a door owes, so point that at a site you own.
+
+The golden vectors are agent-seam's `vectors/wire_vectors.json`, vendored here at the commit
+in `tests/VENDOR.json`. They are edited only upstream: to take a newer set, copy the file from
+an agent-seam checkout at a tag and update the record —
+
+```bash
+git -C ../agent-seam show v0.2.0:vectors/wire_vectors.json > tests/wire_vectors.json
+# then ref, commit, version, date and sha256 in tests/VENDOR.json
+```
+
+— never edit the copy in place. `check_vendor.php` holds the copy to the recorded sha256
+using nothing outside this repository. When an agent-seam checkout sits beside it
+(`../agent-seam`, or wherever `MURETAI_AGENT_SEAM` points) it also confirms the recorded
+commit really produces those bytes and says how many commits behind agent-seam's HEAD the
+pin is; otherwise it prints one `skip:` line and passes.
 
 **Do not check with `curl`.** It sends its own user agent and sails through a CDN bot check
 that would 403 a real agent, so a green `curl` tells you nothing.
@@ -218,7 +238,7 @@ AGENT_ENTRY_BASE_URL=http://127.0.0.1:8099 php -S 127.0.0.1:8099 tests/serve.php
 | `includes/class-plugin.php` | the WordPress half: routing, key custody, cron, admin |
 | `includes/class-woocommerce.php` | the catalogue an agent can ask about |
 | `uninstall.php` | what deleting the plugin removes — including the key |
-| `tests/` | the three checks above. Command-line only; they refuse to run over the web. |
+| `tests/` | the four checks above, and `VENDOR.json`, the pin on the vendored vectors. Command-line only; they refuse to run over the web. |
 
 The first two files have no WordPress symbol in them on purpose: it lets the contract be
 tested without booting a CMS, and it keeps the WordPress adapter small enough to audit.
