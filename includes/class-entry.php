@@ -103,6 +103,14 @@ final class Entry
     /** @var int replies per minute for the whole entry */
     private $ratePerMinTotal;
 
+    /** @var array|null AE-30: the site's own order of its ways in, validated; null = not configured */
+    private $prefer;
+
+    /** The kinds a visitor can take into a site, and the conditions a site may attach.
+     *  Must match PREFER_KINDS / PREFER_WHEN in the JS module and the Python twin. */
+    public const PREFER_KINDS = ['page', 'card', 'mcp'];
+    public const PREFER_WHEN = ['person', 'alone', 'key', 'no-key', 'token', 'browser'];
+
     /**
      * @param string        $seed      32 raw bytes.
      * @param string        $baseUrl   the URL visitors dial; MAY carry a path.
@@ -123,7 +131,53 @@ final class Entry
         };
         $this->ratePerMin = (int) ($options['ratePerMin'] ?? 60);
         $this->ratePerMinTotal = (int) ($options['ratePerMinTotal'] ?? 600);
+        // AE-30: validated BEFORE the card exists, so an invalid order never becomes a
+        // published statement — the same posture as a bad base URL.
+        $this->prefer = self::validatePrefer($options['prefer'] ?? null);
         $this->card = $this->buildCard($options);
+    }
+
+    /**
+     * The exact `agentEntry.prefer` this entry may publish, or InvalidArgumentException (AE-30).
+     *
+     * VALIDATED, NEVER REWRITTEN: this goes on a SIGNED card, and a card that says something
+     * the operator did not write is a worse card than none — so an unknown kind, an unknown
+     * condition or a stray key refuses the whole declaration instead of trimming it. Null
+     * means "not configured": no `prefer` key at all, which keeps an already-deployed
+     * entry's bytes unchanged.
+     *
+     * @param mixed $prefer
+     */
+    public static function validatePrefer($prefer): ?array
+    {
+        if ($prefer === null) {
+            return null;
+        }
+        if (!is_array($prefer) || $prefer === [] || array_keys($prefer) !== range(0, count($prefer) - 1)) {
+            throw new \InvalidArgumentException('agentEntry.prefer must be a non-empty list of "page" | "card" | "mcp" or {kind, when}');
+        }
+        foreach ($prefer as $e) {
+            if (is_string($e)) {
+                if (!in_array($e, self::PREFER_KINDS, true)) {
+                    throw new \InvalidArgumentException('agentEntry.prefer: unknown kind ' . json_encode($e));
+                }
+                continue;
+            }
+            if (!is_array($e) || $e === [] || array_keys($e) === range(0, count($e) - 1)) {
+                throw new \InvalidArgumentException('agentEntry.prefer: an entry must be a kind or {kind, when}');
+            }
+            if (!isset($e['kind']) || !in_array($e['kind'], self::PREFER_KINDS, true)) {
+                throw new \InvalidArgumentException('agentEntry.prefer: unknown kind ' . json_encode($e['kind'] ?? null));
+            }
+            if (array_key_exists('when', $e) && !in_array($e['when'], self::PREFER_WHEN, true)) {
+                throw new \InvalidArgumentException('agentEntry.prefer: unknown condition ' . json_encode($e['when']));
+            }
+            $stray = array_diff(array_keys($e), ['kind', 'when']);
+            if ($stray !== []) {
+                throw new \InvalidArgumentException('agentEntry.prefer: unexpected key(s) ' . implode(', ', $stray));
+            }
+        }
+        return $prefer;
     }
 
     public function did(): string
@@ -181,7 +235,11 @@ final class Entry
             // vendor name. `muretai` stays beside it, byte-identical, because a consumer
             // already deployed against the old key cannot be reached by any change here.
             // A producer MUST emit `agentEntry`; a consumer MUST accept either.
-            'agentEntry' => ['open_door' => true],
+            // AE-30: the site's order of its ways in rides on the NEUTRAL key only; the
+            // alias stays `open_door` alone, so an old consumer comparing the two aliases
+            // byte for byte keeps passing.
+            'agentEntry' => array_merge(['open_door' => true],
+                $this->prefer !== null ? ['prefer' => $this->prefer] : []),
             'muretai' => ['open_door' => true],
             'securitySchemes' => [
                 'did-key-ed25519' => [

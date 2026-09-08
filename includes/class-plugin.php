@@ -42,6 +42,8 @@ final class Plugin
     public const OPT_DESCRIPTION = 'muretai_agent_entry_description';
     public const OPT_ENABLED = 'muretai_agent_entry_enabled';
     public const OPT_REPLY = 'muretai_agent_entry_reply';
+    /** AE-30: the site's own order of its ways in, stored as the JSON the owner typed. */
+    public const OPT_PREFER = 'muretai_agent_entry_prefer';
     public const CRON_HOOK = 'muretai_agent_entry_resign';
 
     /** @var Plugin|null */
@@ -173,6 +175,7 @@ final class Plugin
         $this->entry = new Entry($seed, self::siteBaseUrl(), [
             'name' => (string) get_option(self::OPT_NAME, get_bloginfo('name')),
             'description' => (string) get_option(self::OPT_DESCRIPTION, get_bloginfo('description')),
+            'prefer' => self::readPrefer(),
             'store' => $this->store(),
             'responder' => [$this, 'respond'],
             // A skill is a PROMISE. WooCommerce::skills() returns none when WooCommerce is
@@ -398,12 +401,63 @@ final class Plugin
         );
     }
 
+    /**
+     * AE-30: the stored order, decoded — or null when unset. A value that somehow fails
+     * validation (an edit outside this screen, a downgrade) is treated as unset rather
+     * than allowed to throw inside every request: the door stays open, the order is
+     * simply not declared, and the admin screen says so.
+     */
+    public static function readPrefer(): ?array
+    {
+        $raw = trim((string) get_option(self::OPT_PREFER, ''));
+        if ($raw === '') {
+            return null;
+        }
+        $decoded = json_decode($raw, true);
+        try {
+            return Entry::validatePrefer($decoded);
+        } catch (\InvalidArgumentException $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Refuse to SAVE an invalid order rather than publish a corrected one: the previous
+     * value is kept and the screen shows why. A signed card must say only what the owner
+     * wrote — the same rule the entry itself enforces at construction.
+     *
+     * @param mixed $raw
+     */
+    public function sanitizePrefer($raw): string
+    {
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return '';
+        }
+        $decoded = json_decode($raw, true);
+        try {
+            if ($decoded === null && strtolower($raw) !== 'null') {
+                throw new \InvalidArgumentException('not valid JSON');
+            }
+            Entry::validatePrefer($decoded);
+        } catch (\InvalidArgumentException $e) {
+            add_settings_error(self::OPT_PREFER, 'muretai_agent_entry_prefer_invalid',
+                'Order of your ways in was not saved: ' . $e->getMessage()
+                . ' — allowed entries are "page", "card", "mcp" or {"kind": …, "when": …} '
+                . 'with when one of person, alone, key, no-key, token, browser.');
+            return (string) get_option(self::OPT_PREFER, '');
+        }
+        return $raw;
+    }
+
     public function registerSettings(): void
     {
         register_setting('muretai_agent_entry', self::OPT_ENABLED);
         register_setting('muretai_agent_entry', self::OPT_NAME);
         register_setting('muretai_agent_entry', self::OPT_DESCRIPTION);
         register_setting('muretai_agent_entry', self::OPT_REPLY);
+        register_setting('muretai_agent_entry', self::OPT_PREFER,
+            ['sanitize_callback' => [$this, 'sanitizePrefer']]);
 
         // THE PLAIN CARD AND THE SIGNED CARD MUST AGREE, ALWAYS.
         //
@@ -413,7 +467,7 @@ final class Plugin
         // disagreeing for up to an hour, which reads exactly like tampering. Anything that
         // changes the card's CONTENT therefore drops the cached envelope, and the next
         // request re-mints it.
-        foreach ([self::OPT_NAME, self::OPT_DESCRIPTION] as $opt) {
+        foreach ([self::OPT_NAME, self::OPT_DESCRIPTION, self::OPT_PREFER] as $opt) {
             add_action("update_option_{$opt}", [$this, 'invalidateCardEnvelope'], 10, 0);
         }
     }
@@ -484,6 +538,16 @@ final class Plugin
             . 'per message with the <code>muretai_agent_entry_reply</code> filter.</p></td></tr>',
             esc_attr(self::OPT_REPLY),
             esc_textarea((string) get_option(self::OPT_REPLY, ''))
+        );
+        printf(
+            '<tr><th scope="row">Order of your ways in</th><td><textarea name="%s" rows="2" class="large-text code">%s</textarea>'
+            . '<p class="description">Optional. Which way into your site a visiting agent should try first, as a JSON list — '
+            . 'for example <code>[{"kind":"page","when":"no-key"},"card"]</code>: read on the page if it holds no key, '
+            . 'otherwise the door. Entries are <code>"page"</code>, <code>"card"</code>, <code>"mcp"</code> or '
+            . '<code>{"kind": …, "when": …}</code> with <code>when</code> one of person, alone, key, no-key, token, browser. '
+            . 'Published verbatim on your signed card; an invalid list is not saved.</p></td></tr>',
+            esc_attr(self::OPT_PREFER),
+            esc_textarea((string) get_option(self::OPT_PREFER, ''))
         );
         echo '</tbody></table>';
         submit_button();

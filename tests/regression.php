@@ -291,6 +291,48 @@ check($status === 204 && strpos($h['Allow'] ?? '', 'POST') !== false,
 [$status, , ] = $entry->handle('POST', '/not-a-route', $JSON, '{}');
 check($status === 404, 'POST to an unowned path is still 404');
 
+echo "\n--- 5. AE-30: the site's order of its ways in ---\n";
+
+$declared = [['kind' => 'page', 'when' => 'no-key'], 'card', 'mcp'];
+$withOrder = new Entry(hex2bin(str_repeat('2b', 32)), 'https://shop.example', [
+    'name' => 'Regression Shop', 'store' => new MemoryStore(), 'prefer' => $declared,
+    'responder' => static fn(array $e): string => 'answered',
+]);
+[, , $plain] = $withOrder->handle('GET', '/.well-known/agent-card.json', [], '');
+$card = json_decode($plain, true);
+check(($card['agentEntry']['prefer'] ?? null) === $declared,
+    'a declared order is published verbatim under agentEntry.prefer',
+    json_encode($card['agentEntry'] ?? null));
+check(($card['agentEntry']['open_door'] ?? null) === true, 'open_door still true beside it');
+check(!isset($card['muretai']['prefer']), 'the legacy muretai alias carries no prefer');
+[, , $env] = $withOrder->handle('GET', '/.well-known/agent-card.sig.json', [], '');
+$signed = json_decode($env, true);
+check(($signed['card']['agentEntry']['prefer'] ?? null) === $declared,
+    'the SIGNED card carries the same order');
+
+[, , $plainUnset] = newEntry()->handle('GET', '/.well-known/agent-card.json', [], '');
+check(!array_key_exists('prefer', json_decode($plainUnset, true)['agentEntry'] ?? []),
+    'no prefer key at all when not configured');
+
+foreach ([
+    ['teleport'],
+    [['kind' => 'mcp', 'when' => 'full-moon']],
+    [['kind' => 'card', 'extra' => 1]],
+    [],
+    'card',
+] as $bad) {
+    $refused = false;
+    try {
+        new Entry(hex2bin(str_repeat('2b', 32)), 'https://shop.example', [
+            'store' => new MemoryStore(), 'prefer' => $bad,
+            'responder' => static fn(array $e): string => 'answered',
+        ]);
+    } catch (\InvalidArgumentException $e) {
+        $refused = true;
+    }
+    check($refused, 'an invalid order refuses to start: ' . json_encode($bad));
+}
+
 echo "\n" . str_repeat('-', 60) . "\n";
 $verdict = $fail === [] ? 'PASS' : 'FAIL';
 echo "{$verdict}: {$pass} passed, " . count($fail) . " failed\n";

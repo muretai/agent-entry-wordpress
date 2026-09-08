@@ -77,6 +77,23 @@ Note what is **not** here: a model call. A plugin that reached for an LLM on eve
 message would hand a stranger your API bill. If you want a generated answer, call your own
 model inside this filter, where you decide the budget.
 
+## Which way in first
+
+A visiting agent has more than one way into a site — your pages, a server you declare, or
+this door — and it decides by what it holds. The **Order of your ways in** setting lets you
+say which it should try first, and it is published on your signed card as
+`agentEntry.prefer` (spec AE-30). A JSON list; for example
+
+```json
+[{"kind": "page", "when": "no-key"}, "card"]
+```
+
+says: read on the page if you hold no key, otherwise use the door. Entries are `"page"`,
+`"card"`, `"mcp"` or `{"kind": …, "when": …}` with `when` one of `person`, `alone`, `key`,
+`no-key`, `token`, `browser`. It is published exactly as you wrote it — an invalid list is not
+saved (the screen says why), and leaving it empty publishes no key at all, so a card you
+already have does not change.
+
 ## WooCommerce: your catalogue becomes answerable
 
 With WooCommerce active, the site advertises a `product-search` skill on its card and

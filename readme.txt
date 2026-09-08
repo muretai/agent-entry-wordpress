@@ -4,7 +4,7 @@ Tags: ai, agents, ai-agents, woocommerce, automation
 Requires at least: 5.8
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 0.1.3
+Stable tag: 0.1.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -147,6 +147,12 @@ The settings screen detects this and names the conflicting identity; deactivate 
 2. The agents that have visited, and how often.
 
 == Changelog ==
+
+= 0.1.4 =
+* Order of your ways in (spec AE-30): a new optional setting publishes `agentEntry.prefer` on the
+  card — which way into your site a visiting agent should try first, e.g. read on the page if it
+  holds no key, otherwise the door. Published verbatim on the signed card; an invalid list is not
+  saved, and an unset field publishes no key at all, so existing cards do not change.
 
 = 0.1.3 =
 * Discovery: the door pointer is now also an in-body `<a rel="https://muretai.net/rel/agent-entry">`,
