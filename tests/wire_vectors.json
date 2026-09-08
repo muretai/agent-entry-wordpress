@@ -628,22 +628,45 @@
     "senderEncPub": "142f4b6e50c280a34ceb67ec316947cbd75071c939c19e4cc1435c5f387b6832",
     "recipientSeed": "0909090909090909090909090909090909090909090909090909090909090909",
     "recipientEncPub": "001851fc2f06962aca5648fca7ad8fcb032ce8738791471b6489b7571acf9829",
-    "note": "open_box(recipientSeed, senderEncPub, blob) == plaintext. seal() is NOT pinned — it uses a random nonce, so its output is not reproducible. A client proves that direction with its own round-trip against core; this pins the direction that matters, that a client can OPEN what core sealed.",
+    "note": "open_box(recipientSeed, senderEncPub, blob, ad) == plaintext, where `ad` is the bytes of `adHex` (empty for most cases). seal() is NOT pinned — it uses a random nonce, so its output is not reproducible. A client proves that direction with its own round-trip against core; this pins the direction that matters, that a client can OPEN what core sealed. `mustNotOpen` is the same blob under the wrong associated data and must return the implementation's no-plaintext answer (None / null), never a partial read and never a throw.",
     "open": [
       {
         "name": "plain",
+        "adHex": "",
         "blob": "YYrXndd8212cUzJ2A+sWWspUASAfIn2ipMdHcTh3y+Ir",
         "plaintextHex": "68656c6c6f"
       },
       {
         "name": "non-ascii",
+        "adHex": "",
         "blob": "58o9qnvehBofRDrqZH+xfU+SdmLFB7AlKQt1o0U6bsIWapNjAu5xmA==",
         "plaintextHex": "e7bea4e3828ce3819fe38184"
       },
       {
         "name": "empty",
+        "adHex": "",
         "blob": "Aj7TqCyAdxO3dtdcJ8848Omz3oxT7o2N0mdQSw==",
         "plaintextHex": ""
+      },
+      {
+        "name": "with-associated-data",
+        "adHex": "636f6e7465787449643d6331",
+        "blob": "913KMvf6CCFl+zO9szmWZNGHm97V409qLjkyuVqOQ/VAlchO2CSBwn9vOg==",
+        "plaintextHex": "7061792074686520696e766f696365"
+      }
+    ],
+    "mustNotOpen": [
+      {
+        "name": "associated-data-mismatch",
+        "adHex": "636f6e7465787449643d6332",
+        "blob": "913KMvf6CCFl+zO9szmWZNGHm97V409qLjkyuVqOQ/VAlchO2CSBwn9vOg==",
+        "why": "the `with-associated-data` blob, character for character, opened under b\"contextId=c2\" instead of the b\"contextId=c1\" it was sealed with. The AEAD tag covers the associated data, so this is an authentication failure and not a decode failure: a caller who binds a contextId and then accepts the box under a different one has bound nothing."
+      },
+      {
+        "name": "associated-data-dropped",
+        "adHex": "",
+        "blob": "913KMvf6CCFl+zO9szmWZNGHm97V409qLjkyuVqOQ/VAlchO2CSBwn9vOg==",
+        "why": "the same blob opened with NO associated data. This is the shape a port actually ships — `open_box(seed, pub, blob)` with the parameter left off — and it must fail exactly like the wrong value above, not silently succeed."
       }
     ]
   },
@@ -899,8 +922,480 @@
         },
         "recipientDid": "did:key:z6MkknhhwAGsRrcTTthPSsBbQtrNX6CMqt4poro5jdP6uCue",
         "note": "validly signed, but `to` is not us. The signature verifies for the real recipient; a client must still refuse a message not addressed to it."
+      },
+      {
+        "name": "small-order-signer",
+        "category": "small-order-key",
+        "mustReject": true,
+        "input": {
+          "from": "did:key:z6MkeXATEjyXENzBXBxgC5EHk2JE5aqd7qMGGtDpLUH1e2Sj",
+          "to": "did:key:z6MkknhhwAGsRrcTTthPSsBbQtrNX6CMqt4poro5jdP6uCue",
+          "messageId": "m1",
+          "contextId": "c1",
+          "timestamp": 1784273681,
+          "text": "pay the invoice",
+          "sig": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        },
+        "note": "`from` is the Ed25519 IDENTITY point as a did:key and `sig` is the constant blob R = identity, S = 0, which satisfies [S]B == R + [h]A over EVERY message. No private key exists or is needed. Derive the verifying key through the door that refuses the fourteen small-order encodings — as `from` AND as the signature's first 32 bytes — not through the codec."
+      },
+      {
+        "name": "sig-not-canonical-base64",
+        "category": "sig-not-canonical-base64",
+        "mustReject": true,
+        "input": {
+          "from": "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7",
+          "to": "did:key:z6MkknhhwAGsRrcTTthPSsBbQtrNX6CMqt4poro5jdP6uCue",
+          "messageId": "m1",
+          "contextId": "c1",
+          "timestamp": 1784273681,
+          "text": "pay the invoice",
+          "sig": "E/lo60PN4uJdh7nt2BYj3BZU1rFmsTv+/1WK8iuEJ/zmjn2W6X+ycD+Knvs8mGvJjaJ1b/fHNk+hfUHKtX/1CB=="
+        },
+        "note": "the same 64 signature bytes as the honest message, spelled with a different final DATA character. Standard alphabet, length 88, two trailing '=', decodes without error to the genuine signature — nothing about it is malformed. It is refused because the bytes do not RE-ENCODE to the string that arrived: the last data character carries four bits no decoder reads, so one signature has sixteen names, and a receiver that de-duplicates, logs or replay-caches on the `sig` STRING sees sixteen messages where there is one."
+      },
+      {
+        "name": "wire-names-its-own-recipient",
+        "category": "wrong-recipient",
+        "mustReject": true,
+        "verifierNamesNoRecipient": true,
+        "input": {
+          "from": "did:key:z6MkneMkZqwqRiU5mJzSG3kDwzt9P8C59N4NGTfBLfSGE7c7",
+          "to": "did:key:z6MkknhhwAGsRrcTTthPSsBbQtrNX6CMqt4poro5jdP6uCue",
+          "messageId": "m1",
+          "contextId": "c1",
+          "timestamp": 1784273681,
+          "text": "pay the invoice",
+          "sig": "E/lo60PN4uJdh7nt2BYj3BZU1rFmsTv+/1WK8iuEJ/zmjn2W6X+ycD+Knvs8mGvJjaJ1b/fHNk+hfUHKtX/1CA==",
+          "recipientDid": "did:key:z6MkknhhwAGsRrcTTthPSsBbQtrNX6CMqt4poro5jdP6uCue"
+        },
+        "note": "a valid envelope addressed to someone else, carrying an UNSIGNED `recipientDid` equal to `to`, presented to a verifier that names no recipient. An implementation that falls back to a recipient supplied by the message compares the wire against itself and accepts every replay. Who \"me\" is comes from the caller or from nowhere; `recipientDid` is not one of the six signed fields and must never be read as one."
       }
     ],
+    "encoding": {
+      "note": "`documentHex` is the hex of the RAW DOCUMENT BYTES. Decode the hex, then parse, then canonicalize: `refuse` must fail somewhere on that path and `accept` must produce `canonical` exactly. Do not route this through a decoder that repairs — Go's encoding/json and JavaScript's Buffer.toString('utf8') both substitute U+FFFD and both then agree with a document nobody signed. The supported paths are seam.Unmarshal / seam.CanonicalFromJSON (Go), a FATAL TextDecoder then canonicalBytes (JavaScript), json.loads then crypto.canonical (Python), and serde_json::from_slice then canonical (Rust).",
+      "accept": [
+        {
+          "name": "literal-replacement-char",
+          "documentHex": "7b2273223a22efbfbd227d",
+          "canonical": "{\"s\":\"�\"}",
+          "why": "U+FFFD written by the sender ON PURPOSE. It is an ordinary character and MUST canonicalize; refusing it would only trade one split for another, and it is the control that stops this group passing by refusing everything."
+        },
+        {
+          "name": "astral-pair-escape",
+          "documentHex": "7b2273223a225c75643833645c7564633236227d",
+          "canonical": "{\"s\":\"🐦\"}",
+          "why": "a WELL-FORMED surrogate pair, as JSON escapes. High then low, adjacent: one character, U+1F426, and the canonical bytes carry it literally as UTF-8."
+        },
+        {
+          "name": "astral-literal",
+          "documentHex": "7b2273223a22f09f90a6227d",
+          "canonical": "{\"s\":\"🐦\"}",
+          "why": "the same character as raw UTF-8 bytes. Two spellings of one document: both must produce the identical canonical bytes as `astral-pair-escape` above."
+        }
+      ],
+      "refuse": [
+        {
+          "name": "lone-high-surrogate-escape",
+          "category": "lone-surrogate",
+          "mustReject": true,
+          "documentHex": "7b2273223a225c7564383030227d",
+          "why": "a high surrogate with nothing after it. Legal JSON text, not a legal string: no character has this code point, and UTF-8 cannot encode it."
+        },
+        {
+          "name": "lone-low-surrogate-escape",
+          "category": "lone-surrogate",
+          "mustReject": true,
+          "documentHex": "7b2273223a225c7564666666227d",
+          "why": "a low surrogate with nothing before it — the other half of the same rule."
+        },
+        {
+          "name": "lone-surrogate-in-key",
+          "category": "lone-surrogate",
+          "mustReject": true,
+          "documentHex": "7b225c7564383030223a2278227d",
+          "why": "the same defect in a KEY. A canonicaliser that guards only string VALUES sorts and emits this one straight into the bytes it signs."
+        },
+        {
+          "name": "reversed-surrogate-pair",
+          "category": "lone-surrogate",
+          "mustReject": true,
+          "documentHex": "7b2273223a225c75646330305c7564383030227d",
+          "why": "low then high: two escapes that LOOK like a pair and are two lone surrogates. A scanner that pairs on adjacency rather than on order accepts it."
+        },
+        {
+          "name": "truncated-utf8-sequence",
+          "category": "invalid-utf8",
+          "mustReject": true,
+          "documentHex": "7b2273223a22e697227d",
+          "why": "the first two bytes of the three-byte sequence for U+65E5, delivered without the third. A repairing decoder yields one U+FFFD and signs it."
+        },
+        {
+          "name": "stray-continuation-byte",
+          "category": "invalid-utf8",
+          "mustReject": true,
+          "documentHex": "7b2273223a2280227d",
+          "why": "a continuation byte that continues nothing. Never valid UTF-8 in any position."
+        },
+        {
+          "name": "surrogate-encoded-as-utf8",
+          "category": "invalid-utf8",
+          "mustReject": true,
+          "documentHex": "7b2273223a22eda080227d",
+          "why": "CESU-8: U+D800 written as three UTF-8-shaped bytes rather than as a \\ud800 escape. Invalid UTF-8, and the case that proves the two refusals are one rule — Python's json.loads decodes it with `surrogatepass` and hands `canonical` a lone surrogate, so the document that entered as bad BYTES leaves through the surrogate door."
+        }
+      ]
+    },
+    "keystate": {
+      "note": "The anti-rollback ratchet. `pinned` is a KeyState the CALLER kept from an earlier verified contact; `inline` is what the sender attached to this message. Resolve with both and compare against `expect` — JavaScript `resolveOpDid(rootDid, inline, checkNow, {pinned})`, Python `keystate.resolve_op_did(rootDid, inline, pinned, now=checkNow)`. The argument ORDER differs between the two references, which is why the vector names fields and never positions. Every record here verifies; nothing in this group is about a bad signature. A case carrying `mustNotRaise` must also not throw: the resolver is pure and total, and a record whose `revokedOps` is a number or a boolean is one a stranger can mint against their own root key — an exception there is a verifier switched off by one field, which is a DIFFERENT failure from a wrong answer, so report which. Go and Rust implement no KeyState, and their runners SKIP this group BY NAME rather than silently — an omission nobody can see is the same as a check nobody has.",
+      "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+      "checkNow": 1784273681,
+      "accept": [
+        {
+          "name": "no-pin-first-contact",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "wC/whs877c9o00v/RR9+ZiELMsGIoH5i1aA6SvO+lPYzM85QGqse6x49wU9s9+O8yCKjLIQRsxiyWFnqTRKnBA=="
+          },
+          "expect": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "why": "no pin yet, and a verifying inline record names the op-key. This IS first contact and it must keep answering what it always answered — a resolver that ignored its pin argument would pass every refusal below and fail here."
+        },
+        {
+          "name": "higher-epoch-adopted",
+          "pinned": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "wC/whs877c9o00v/RR9+ZiELMsGIoH5i1aA6SvO+lPYzM85QGqse6x49wU9s9+O8yCKjLIQRsxiyWFnqTRKnBA=="
+          },
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 2,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+            "opNextHash": "4073768b35722d580d405b4be40b08484a437238cb30ee0e7d1badf36171b852",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "WOyQMaGQF0bAqiyVEQ+i7dona2Nawe7JQfS/zj9chG7+2800UYift4eJA8db10UnwUM1S+zuPEiUDa/FMWlnDg=="
+          },
+          "expect": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+          "why": "a STRICTLY greater epoch under the same rootKey is a real rotation and must be adopted. Without this case a resolver that always returned the pin's own opDid would pass the whole group and never follow anybody's rotation."
+        },
+        {
+          "name": "revoked-ops-number",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": 5,
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "nI3is4NEXytodili+Ddtcqg9SmSVFAQewU9hLG9j/nmR87FSo5/m4y/TAMYnw15440Lw+jABfljyv7H3n98xAQ=="
+          },
+          "expect": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "mustNotResolveTo": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "mustNotRaise": true,
+          "why": "`revokedOps: 5`. Python's `x in 5` raises TypeError and JavaScript's `Array.isArray` says no; the contract is the second answer. One field of the wrong type in a correctly signed record must not turn a verifier off."
+        },
+        {
+          "name": "revoked-ops-boolean",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": true,
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "wcUyhbshkTZb7k23BH/PZAlTUGHrBE7D+V2bFgaG601PV+CRszeJCdhKPhSjnrFOJQfhiNRigqmZv9dpJ5kQDA=="
+          },
+          "expect": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "mustNotResolveTo": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "mustNotRaise": true,
+          "why": "`revokedOps: true` — the same TypeError, and worth its own case because a guard written as `isinstance(x, (list, tuple))` still admits neither while a guard written as `if revoked:` admits both."
+        },
+        {
+          "name": "revoked-ops-string-containing-op",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": "xdid:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKby",
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "WcGeyA5EC//cVROjLR5Vo9BxmDqVO43kB2GLruvLm59RY4ZJM4S4gVYeFwRHTWFZl2xhZ1L5h2/r7UyU4pLYCw=="
+          },
+          "expect": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "mustNotResolveTo": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "mustNotRaise": true,
+          "why": "`revokedOps` is a STRING with the opDid inside it. This one does not crash — it answers the wrong question, because Python's `in` over a string is a substring test, so one 62-byte string burns every op-key whose DID appears anywhere in it. The answer it gives is `burned`, which sends the resolver to the root and kills every message the peer signs with its live op-key."
+        },
+        {
+          "name": "revoked-ops-object-keyed-by-op",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": {
+              "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb": 1
+            },
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "lAb0uujcD17MSY58WNvVR5wZ4o5Cmq82B/1UvbmvkwT4e3dIr5WaX+8tmphGtygYdAabK5ubcgCW5+fNtAoaAQ=="
+          },
+          "expect": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "mustNotResolveTo": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "mustNotRaise": true,
+          "why": "`revokedOps` is an OBJECT keyed by the opDid — membership over dict keys, so the record burns by shape rather than by content. The quiet twin of the string case, and the reason the rule is `is it a list`, not `does `in` work`."
+        },
+        {
+          "name": "revoked-ops-empty-list",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "wC/whs877c9o00v/RR9+ZiELMsGIoH5i1aA6SvO+lPYzM85QGqse6x49wU9s9+O8yCKjLIQRsxiyWFnqTRKnBA=="
+          },
+          "expect": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "mustNotResolveTo": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "why": "the honest empty list burns nothing. Pinned so that `revokedOps` cannot be made to burn by mere presence."
+        },
+        {
+          "name": "revoked-ops-genuine-list",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [
+              "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb"
+            ],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "1yqZkE56kQXNpsmj5ji9B35hHJvzZYJzHAU63kn+6WJ2EcwS8wc9r8FFrp4uoxkQCuIpMq7p66mQwVGgV7rhAg=="
+          },
+          "expect": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "mustNotResolveTo": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "why": "THE CONTRAST, and the case that stops the four above being passed by an implementation that ignores `revokedOps` altogether: a genuine `[opDid]` list really does burn, and a state that burns its OWN opDid authorizes nobody, so the answer is the root DID."
+        }
+      ],
+      "refuse": [
+        {
+          "name": "replayed-lower-epoch",
+          "category": "keystate-rollback",
+          "mustReject": true,
+          "pinned": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 2,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+            "opNextHash": "4073768b35722d580d405b4be40b08484a437238cb30ee0e7d1badf36171b852",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "WOyQMaGQF0bAqiyVEQ+i7dona2Nawe7JQfS/zj9chG7+2800UYift4eJA8db10UnwUM1S+zuPEiUDa/FMWlnDg=="
+          },
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "wC/whs877c9o00v/RR9+ZiELMsGIoH5i1aA6SvO+lPYzM85QGqse6x49wU9s9+O8yCKjLIQRsxiyWFnqTRKnBA=="
+          },
+          "mustNotResolveTo": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "expect": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+          "why": "an epoch-1 record replayed over an epoch-2 pin. It VERIFIES — it really was signed by this root — and that is the point: authenticity is not freshness, so the only thing between a thief holding a retired op-key and a live delegation is the epoch the caller remembers."
+        },
+        {
+          "name": "pin-revokes-op",
+          "category": "keystate-revoked-op",
+          "mustReject": true,
+          "pinned": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 2,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+            "opNextHash": "4073768b35722d580d405b4be40b08484a437238cb30ee0e7d1badf36171b852",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [
+              "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb"
+            ],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "HlRyNgqVxx/pUGTinn405FI3qiFncZEgQmvA7T8U57jsLjqb6XFgeumx7O1hPV2/ldLTXmCbYgmSA3c0JCBOCQ=="
+          },
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 3,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "TWU0pVfkYm52yUpywfK65Ws8sA6DopK64LzeahMBk1L7TzXGxp0saLRtfPh9cmmWEPJ4D3aBxLzl/GDC7O6zCA=="
+          },
+          "mustNotResolveTo": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "expect": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+          "why": "the inline record is at a HIGHER epoch, so the epoch ratchet adopts it — and it names the very op-key the pin burned. The pin's `revokedOps` is the half with teeth, because the stranger did not choose it. Answering the root would also be safe and is still wrong: the pin stands behind its own opDid, so that is the answer, and the root only when that one is burned too."
+        },
+        {
+          "name": "same-epoch-fork",
+          "category": "keystate-fork",
+          "mustReject": true,
+          "pinned": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 2,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+            "opNextHash": "4073768b35722d580d405b4be40b08484a437238cb30ee0e7d1badf36171b852",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "WOyQMaGQF0bAqiyVEQ+i7dona2Nawe7JQfS/zj9chG7+2800UYift4eJA8db10UnwUM1S+zuPEiUDa/FMWlnDg=="
+          },
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 2,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
+            "opNextHash": "6bf060d46a6a9b048bd43baad69df052932e79e58cecf94d1e4886e7b856b7fc",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "TBXmTMXxVZi0M6cFrFvjB8m4yPO6JQZtvtH+gHnlJu756w/t7/5RiErHJZmeFmEwYGij/gMjixoLjOxA+1fbAw=="
+          },
+          "mustNotResolveTo": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
+          "expect": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+          "why": "two records at ONE epoch naming different opDids. Equal is not an upgrade, it is a fork, and a resolver that adopts on `>=` takes the stranger's history over the one it verified itself."
+        }
+      ]
+    },
     "invite": [
       {
         "name": "expired-invite",
@@ -982,5 +1477,5 @@
       }
     ]
   },
-  "rejectNote": "Each case MUST be rejected by your receiver (`mustReject`). `category` is language-neutral guidance, NOT core's -32xxx — your own error taxonomy is yours. message: verified with the key DERIVED FROM `from` (crypto.verify_envelope); invite: shared/invite.verify_invite, judged at the case's `checkNow`; claim: signature MUST verify AND a one-time nonce THIS device issued must be consumed before any trust is written. ONE case cannot be a static vector: `claim-spent-nonce` (a replayed claim whose nonce was already consumed) needs receiver state, so it is a REQUIRED client unit test, not pinned here — the same boundary as cryptobox's random-nonce seal."
+  "rejectNote": "Each case MUST be rejected by your receiver (`mustReject`). `category` is language-neutral guidance, NOT core's -32xxx — your own error taxonomy is yours. message: verified with the key DERIVED FROM `from` (crypto.verify_envelope) — and note that `wire-names-its-own-recipient` carries `verifierNamesNoRecipient`, which means the verifier must be called with NO recipient of its own; naming one makes the case pass for the wrong reason. encoding: raw document BYTES as hex, refused at the parse boundary (see that group's own note) with an `accept` half that must still canonicalize; invite: shared/invite.verify_invite, judged at the case's `checkNow`; claim: signature MUST verify AND a one-time nonce THIS device issued must be consumed before any trust is written. ONE case cannot be a static vector: `claim-spent-nonce` (a replayed claim whose nonce was already consumed) needs receiver state, so it is a REQUIRED client unit test, not pinned here — the same boundary as cryptobox's random-nonce seal."
 }

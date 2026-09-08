@@ -183,8 +183,50 @@ foreach ($rawDecoded->cardpub as $case) {
 
 // ------------------------------------------------------------------ reject set
 
+// THE MESSAGE HALF, which this walk used to skip entirely. Every case below is an object
+// carrying `input` rather than a bare `did`, so the DID-shaped branch further down passed
+// over all of them in silence — a group nobody drives looks exactly like a group that
+// passes. Driving them found a real defect: `sig-not-canonical-base64` VERIFIED here on
+// PHP 7.4 and 8.3 while the four other references refused it, because `base64_decode`
+// tolerates the four bits a padded signature's last character discards. Wire::strictB64
+// closes it; this loop is what stops it coming back.
+if (isset($rawDecoded->reject->message)) {
+    foreach ($rawDecoded->reject->message as $case) {
+        $i = $case->input;
+        // The recipient is named by US, from the case or from the message's SIGNED `to` —
+        // never from an unsigned field. `wire-names-its-own-recipient` carries a
+        // `recipientDid` equal to its own `to` precisely so that reading it off the wire
+        // compares the message against itself and always agrees.
+        $me = (isset($case->verifierNamesNoRecipient) && $case->verifierNamesNoRecipient)
+            ? '' : ($case->recipientDid ?? $i->to);
+        $verified = Wire::verifyEnvelope(
+            $i->from, $me, $i->messageId, $i->contextId ?? null,
+            $i->timestamp, $i->text, $i->sig ?? null
+        );
+        check(!$verified, "reject[message/{$case->name}] is refused");
+    }
+    // The control that keeps the loop above honest: one envelope signed HERE, which must
+    // verify. Without it, a verifyEnvelope that answered false to everything would report
+    // every case refused and look perfect.
+    $ctlSeed = str_repeat("\x2b", 32);
+    $ctlFrom = Wire::didFromSeed($ctlSeed);
+    $ctlTo = Wire::didFromSeed(str_repeat("\x3c", 32));
+    $ctlSig = Wire::signEnvelope($ctlSeed, null, $ctlFrom, 'control-1', 'hello', 1757000000, $ctlTo);
+    check(
+        Wire::verifyEnvelope($ctlFrom, $ctlTo, 'control-1', null, 1757000000, 'hello', $ctlSig),
+        'this suite can still say YES — an envelope signed here verifies, so the refusals '
+        . 'above are refusals and not a verifier that answers false to everything'
+    );
+}
+
 if (isset($rawDecoded->reject)) {
     foreach (get_object_vars($rawDecoded->reject) as $group => $cases) {
+        if ($group === 'message') {
+            continue;                       // driven above, properly
+        }
+        if (!is_array($cases)) {
+            continue;                       // encoding/keystate are objects: {note, accept, refuse}
+        }
         foreach ($cases as $case) {
             $label = is_object($case) ? ($case->name ?? $group) : (string) $case;
             // The reject set is about DIDs and signatures that must not verify.

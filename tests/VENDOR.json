@@ -1,15 +1,15 @@
 {
-  "_": "Written by hand for now — copy tests/wire_vectors.json from an agent-seam checkout at a tag (git -C ../agent-seam show v0.2.0:vectors/wire_vectors.json > tests/wire_vectors.json) and then update ref, commit, version, date and sha256 here; never edit the copy in place; tests/check_vendor.php holds the copy to these digests without any agent-seam checkout present.",
+  "_": "Written by hand for now \u2014 copy tests/wire_vectors.json from an agent-seam checkout at a tag (git -C ../agent-seam show v0.3.0:vectors/wire_vectors.json > tests/wire_vectors.json) and then update ref, commit, version, date and sha256 here; never edit the copy in place; tests/check_vendor.php holds the copy to these digests without any agent-seam checkout present.",
   "from": "agent-seam",
   "repository": "https://github.com/muretai/agent-seam",
-  "ref": "v0.2.1",
-  "commit": "f93d595ec02d007ca5fff80b583cc1710d4d1734",
-  "version": "0.2.1",
+  "ref": "v0.3.0",
+  "commit": "dcefaaecb7b92e222af820fca45bc56f90e22016",
+  "version": "0.3.0",
   "date": "2026-09-08",
   "files": {
     "tests/wire_vectors.json": {
       "source": "vectors/wire_vectors.json",
-      "sha256": "e03e083f644167a67132638ab74fd1c62667db2733fb58466dce2644feca39c2"
+      "sha256": "31d256cb4f360481865551dd63492fbb5a955a2c146c870b33133ffb30704841"
     }
   }
 }

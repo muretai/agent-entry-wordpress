@@ -473,6 +473,41 @@ final class Wire
      *
      * @param mixed $timestamp
      */
+    /**
+     * The bytes of a standard-base64 signature that has EXACTLY ONE spelling, or null.
+     *
+     * `base64_decode($s, true)` refuses characters outside the alphabet, which is most of
+     * the way — but not all of it, and the remainder is the part nobody expects. A 64-byte
+     * signature encodes to 88 characters ending `==`, so its final data character carries
+     * six bits of which the decoder reads two and DISCARDS FOUR. All sixteen characters
+     * sharing those two bits decode to the identical signature, so one signature had
+     * sixteen names, and a peer that logs or de-duplicates by the literal `sig` string saw
+     * sixteen messages where there was one. Measured against this plugin on PHP 7.4 and
+     * 8.3: the wire vectors' `sig-not-canonical-base64` case, which is exactly such a
+     * sibling, verified TRUE here while the JavaScript, Python, Go and Rust references all
+     * refused it. That is a split in the contract, not a cosmetic difference.
+     *
+     * The rule the other four settled on, character for character: the standard alphabet
+     * with at most two trailing `=`, a length that is a multiple of 4, and — the leg that
+     * actually makes the mapping one-to-one — the decoded bytes must RE-ENCODE to the
+     * string that arrived. The encoder writes those spare bits as zero, so re-encoding
+     * names the one member of the family a standard encoder would have produced.
+     */
+    private static function strictB64(?string $value): ?string
+    {
+        if ($value === null || $value === '' || strlen($value) % 4 !== 0) {
+            return null;
+        }
+        if (preg_match('/\A[A-Za-z0-9+\/]*={0,2}\z/', $value) !== 1) {
+            return null;
+        }
+        $raw = base64_decode($value, true);
+        if ($raw === false || base64_encode($raw) !== $value) {
+            return null;
+        }
+        return $raw;
+    }
+
     public static function verifyEnvelope(
         string $from,
         string $to,
@@ -487,8 +522,8 @@ final class Wire
         }
         try {
             $pub = self::publicKeyFromDid($from);
-            $sig = base64_decode($sigB64, true);
-            if ($sig === false || strlen($sig) !== SODIUM_CRYPTO_SIGN_BYTES) {
+            $sig = self::strictB64($sigB64);
+            if ($sig === null || strlen($sig) !== SODIUM_CRYPTO_SIGN_BYTES) {
                 return false;
             }
             $payload = self::signingPayload($contextId, $from, $messageId, $text, $timestamp, $to);
