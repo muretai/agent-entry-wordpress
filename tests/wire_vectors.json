@@ -344,6 +344,7 @@
         "name": "no-expiry",
         "rootDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
         "deviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
+        "expectedDeviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
         "ownerSeed": "1717171717171717171717171717171717171717171717171717171717171717",
         "deviceSeed": "1818181818181818181818181818181818181818181818181818181818181818",
         "ts": 1784273681,
@@ -363,6 +364,7 @@
         "name": "bounded",
         "rootDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
         "deviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
+        "expectedDeviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
         "ownerSeed": "1717171717171717171717171717171717171717171717171717171717171717",
         "deviceSeed": "1818181818181818181818181818181818181818181818181818181818181818",
         "ts": 1784273681,
@@ -384,6 +386,7 @@
         "name": "float-ts",
         "category": "float-ts",
         "mustReject": true,
+        "expectedDeviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
         "input": {
           "typ": "muretai/devicebinding/2",
           "rootDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
@@ -399,6 +402,7 @@
         "name": "missing-deviceSig",
         "category": "missing-deviceSig",
         "mustReject": true,
+        "expectedDeviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
         "input": {
           "typ": "muretai/devicebinding/2",
           "rootDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
@@ -413,6 +417,7 @@
         "name": "wrong-typ",
         "category": "wrong-typ",
         "mustReject": true,
+        "expectedDeviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
         "input": {
           "typ": "muretai/devicebinding/1",
           "rootDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
@@ -423,6 +428,22 @@
           "deviceSig": "zJGq14Oifmq08Z6LcWVx4Re0H1v+FT6EuaE2vQ8Ntf4wC8mW9IEu+LLCnzcy8b1dbtw30r9MYYLxMAQOIQl4DA=="
         },
         "note": "typ says muretai/devicebinding/1 and both signatures are genuine over those bytes. `typ` is INSIDE the signed payload precisely so another artifact type can never be replayed as an account binding — match it exactly, before the signatures."
+      },
+      {
+        "name": "binding-lifted-to-another-device",
+        "category": "wrong-device",
+        "mustReject": true,
+        "expectedDeviceDid": "did:key:z6MkhpF78Lxxxj7dhtCcog2PMVEGrPEwpCQnVwGos6Lvmut2",
+        "input": {
+          "typ": "muretai/devicebinding/2",
+          "rootDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+          "deviceDid": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
+          "ts": 1784273681,
+          "validUntil": 0,
+          "sig": "9uaChaM0gQoIgiZqV/k8FDBZXHiaJPvtZbijhoQWogbCVb0ylI+hMNESnQ4bSsreEbE+d50kaBv+12E8UxBCDw==",
+          "deviceSig": "OowWKRk3TNZr58K+/Yd+y/iA5siZPN4IF/0lQYFqMcWy8/EHaodbt8tWx+K883uTI55xh1rKpwd5pFuJ8CSvBQ=="
+        },
+        "note": "a GENUINE, unmodified binding — the same bytes as cases/no-expiry, which the verifier accepts — presented while the caller expects a DIFFERENT device. Nothing in the record is wrong; the record is not ABOUT the sender. A binding is public, so anyone who has seen one can lift it onto their own message and be read as the owner's account at every receiver, and `expectedDeviceDid` is the only thing between that and a trusted contact. Note where the expected value comes from: the CASE, never the binding — a runner that reads it off the binding is asking the attacker who the attacker is."
       }
     ]
   },
@@ -971,8 +992,90 @@
         "note": "a valid envelope addressed to someone else, carrying an UNSIGNED `recipientDid` equal to `to`, presented to a verifier that names no recipient. An implementation that falls back to a recipient supplied by the message compares the wire against itself and accepts every replay. Who \"me\" is comes from the caller or from nowhere; `recipientDid` is not one of the six signed fields and must never be read as one."
       }
     ],
+    "did": [
+      {
+        "name": "x25519-multicodec",
+        "category": "wrong-multicodec",
+        "mustReject": true,
+        "did": "did:key:z6LSbgC4DpuCf7zxewhFPnYcyBm3YgxjEEovsehvWqZzTm8z",
+        "decodedHex": "ec01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "why": "multicodec 0xec 0x01 (x25519-pub) and a 32-byte key: THIRTY-FOUR BYTES, exactly what an ed25519 did:key decodes to. A decoder that checks only the length accepts it and returns an X25519 key as a verification key. The prefix is the only thing that says which curve, and `did:key` is a multi-curve method — this is a real identifier, for something that is not an envelope signer."
+      },
+      {
+        "name": "ed25519-prefix-31-byte-key",
+        "category": "wrong-length",
+        "mustReject": true,
+        "did": "did:key:z2DQUyFVAEfvDjYRPtvHSJtztMsCSrYpntBE51RxhhkqQhb",
+        "decodedHex": "ed01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+        "why": "the ed25519 multicodec and a THIRTY-ONE byte key. Right prefix, wrong length: a decoder that checks the multicodec and slices [2:] returns 31 bytes and leaves the next layer to notice, which is a rule stated in a place nobody reads it."
+      },
+      {
+        "name": "ed25519-prefix-33-byte-key",
+        "category": "wrong-length",
+        "mustReject": true,
+        "did": "did:key:zQebeJyLcziHBQxE7NwXYwvqBdyYXvZbuctgvB7GWAED7Q8yV",
+        "decodedHex": "ed01000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00",
+        "why": "the ed25519 multicodec and a THIRTY-THREE byte key — the same rule from the other side, and the one a `>= 34` bound admits. A trailing zero byte is what an encoder that padded to a block size would produce."
+      }
+    ],
+    "cardpub": [
+      {
+        "name": "sig-flipped-base64-char",
+        "category": "bad-signature",
+        "mustReject": true,
+        "expectedDid": "did:key:z6MkpFkurpyZgyna5SAfLpvdzp7W6cvdc1fn9YECrwv3AMbF",
+        "envelope": {
+          "v": 1,
+          "typ": "agentcard",
+          "card": {
+            "did": "did:key:z6MkpFkurpyZgyna5SAfLpvdzp7W6cvdc1fn9YECrwv3AMbF",
+            "name": "Node",
+            "url": "http://127.0.0.1:8001/"
+          },
+          "ts": 1784273681,
+          "sig": "BCj9aVQ4Ch0bgGw3Q85lm5M2IoSYPiunbOUaAosDrXklwq2tbEBfd2pNGcTBZyFnDXvVaJmObtCChddM/SNkAQ=="
+        },
+        "why": "one character of the signature changed, in a data position — still canonical standard base64, still exactly 64 bytes, so `b64_strict`/`strictB64` hands it straight to the verifier. The ONLY thing that refuses it is the Ed25519 check, which is why a verifier that decodes a signature and never uses it passes every other case in this file and fails here."
+      },
+      {
+        "name": "signed-by-another-key",
+        "category": "foreign-signer",
+        "mustReject": true,
+        "expectedDid": "did:key:z6MkpFkurpyZgyna5SAfLpvdzp7W6cvdc1fn9YECrwv3AMbF",
+        "envelope": {
+          "v": 1,
+          "typ": "agentcard",
+          "card": {
+            "did": "did:key:z6MkpFkurpyZgyna5SAfLpvdzp7W6cvdc1fn9YECrwv3AMbF",
+            "name": "Node",
+            "url": "http://127.0.0.1:8001/"
+          },
+          "ts": 1784273681,
+          "sig": "VLRAamWWW/FrxMEnHeW1s13M96N07ZFsPwpILaMC/oMqup1SnofOV+zXJm5J7dls4KYiovOwuXtoyM85pTiVAQ=="
+        },
+        "why": "the card is untouched and `card.did` is the honest DID; the signature is a real signature by a DIFFERENT key over the identical payload. A signed card is the only proof a DID belongs to an origin, and this is the forgery it exists to stop: a relay, or anyone able to answer for one, publishing a card under somebody else's identity. Verify under the DID the CARD names, never under whoever handed you the bytes."
+      },
+      {
+        "name": "tampered-card-body",
+        "category": "tampered-payload",
+        "mustReject": true,
+        "expectedDid": "did:key:z6MkpFkurpyZgyna5SAfLpvdzp7W6cvdc1fn9YECrwv3AMbF",
+        "envelope": {
+          "v": 1,
+          "typ": "agentcard",
+          "card": {
+            "did": "did:key:z6MkpFkurpyZgyna5SAfLpvdzp7W6cvdc1fn9YECrwv3AMbF",
+            "name": "Node",
+            "url": "http://attacker.example/"
+          },
+          "ts": 1784273681,
+          "sig": "8Cj9aVQ4Ch0bgGw3Q85lm5M2IoSYPiunbOUaAosDrXklwq2tbEBfd2pNGcTBZyFnDXvVaJmObtCChddM/SNkAQ=="
+        },
+        "why": "a GENUINE signature — it really was made by this DID — over the ORIGINAL card, with `url` rewritten afterwards. The bytes are honestly signed bytes; they are not signed bytes of this card. It catches a verifier that checks the signature against anything other than the exact canonical payload of `{card, ts, typ, v}` — a re-serialised decoded card, the envelope itself, or the card alone."
+      }
+    ],
     "encoding": {
-      "note": "`documentHex` is the hex of the RAW DOCUMENT BYTES. Decode the hex, then parse, then canonicalize: `refuse` must fail somewhere on that path and `accept` must produce `canonical` exactly. Do not route this through a decoder that repairs — Go's encoding/json and JavaScript's Buffer.toString('utf8') both substitute U+FFFD and both then agree with a document nobody signed. The supported paths are seam.Unmarshal / seam.CanonicalFromJSON (Go), a FATAL TextDecoder then canonicalBytes (JavaScript), json.loads then crypto.canonical (Python), and serde_json::from_slice then canonical (Rust).",
+      "note": "`documentHex` is the hex of the RAW DOCUMENT BYTES. Decode the hex, then parse, then canonicalize: `refuse` must fail somewhere on that path and `accept` must produce `canonical` exactly. Do not route this through a decoder that repairs — Go's encoding/json and JavaScript's Buffer.toString('utf8') both substitute U+FFFD and both then agree with a document nobody signed — and do not route it through one that STRIPS or SNIFFS, which is the same defect one layer out: a byte order mark removed, or a UTF-16 document decoded, is again two wire documents signing one byte string. Each reference now owns the whole boundary in one named function rather than asking its caller to assemble one: seam.CanonicalFromJSON (Go), canonicalFromJSON (JavaScript), crypto.canonical_from_json (Python), serde_json::from_slice then canonical (Rust).",
       "accept": [
         {
           "name": "literal-replacement-char",
@@ -991,6 +1094,12 @@
           "documentHex": "7b2273223a22f09f90a6227d",
           "canonical": "{\"s\":\"🐦\"}",
           "why": "the same character as raw UTF-8 bytes. Two spellings of one document: both must produce the identical canonical bytes as `astral-pair-escape` above."
+        },
+        {
+          "name": "same-document-unmarked",
+          "documentHex": "7b2261223a317d",
+          "canonical": "{\"a\":1}",
+          "why": "the OTHER HALF of `leading-utf8-bom`, and the reason that refusal is about the mark rather than about this document. These two byte strings differ by three bytes and canonicalize to one — so exactly one of them may be readable, and RFC 8259 §8.1 says which. A reference that refused both would pass the refuse half and fail here."
         }
       ],
       "refuse": [
@@ -1042,6 +1151,20 @@
           "mustReject": true,
           "documentHex": "7b2273223a22eda080227d",
           "why": "CESU-8: U+D800 written as three UTF-8-shaped bytes rather than as a \\ud800 escape. Invalid UTF-8, and the case that proves the two refusals are one rule — Python's json.loads decodes it with `surrogatepass` and hands `canonical` a lone surrogate, so the document that entered as bad BYTES leaves through the surrogate door."
+        },
+        {
+          "name": "leading-utf8-bom",
+          "category": "byte-order-mark",
+          "mustReject": true,
+          "documentHex": "efbbbf7b2261223a317d",
+          "why": "the ACCEPT case `same-document-unmarked` with EF BB BF in front of it. RFC 8259 §8.1 says a networked JSON text does not carry a byte order mark, and the reason to refuse rather than strip is in the pair: two distinct byte strings that both canonicalize to {\"a\":1} are one signature authenticating a document its signer never saw, which is the lone-surrogate collision above wearing a different hat. This one split the four references two-and-two — Python read it as utf-8-sig, JavaScript's TextDecoder stripped it (ignoreBOM defaults to FALSE, and the flag means `do not strip`), Go and Rust refused at the first byte."
+        },
+        {
+          "name": "utf16le-no-bom",
+          "category": "wrong-encoding",
+          "mustReject": true,
+          "documentHex": "7b002200610022003a0031007d00",
+          "why": "the same document as UTF-16LE with no mark at all. Python's json.loads sniffs the encoding from NUL bytes in the first four and reads UTF-16 and UTF-32 documents the other three refuse; nothing else on this wire has ever been anything but UTF-8. The second clause of one guard, and its own case so that neither clause can be deleted unnoticed."
         }
       ]
     },
@@ -1263,6 +1386,54 @@
           "expect": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
           "mustNotResolveTo": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
           "why": "THE CONTRAST, and the case that stops the four above being passed by an implementation that ignores `revokedOps` altogether: a genuine `[opDid]` list really does burn, and a state that burns its OWN opDid authorizes nobody, so the answer is the root DID."
+        },
+        {
+          "name": "expired-window",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 1784266481,
+            "notAfter": 1784270081,
+            "ts": 1784266481,
+            "sig": "dmCUZJTjIBZDF45yC3TZSjTbgJzYeostskkDVT/vo4kKzgLds+KNSd6yLEJYuHt+WB7u+UUR5G9qVVjAdayjAQ=="
+          },
+          "expect": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "mustNotResolveTo": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "why": "`notAfter` is an hour before checkNow. The record is otherwise perfect — it verifies inside its own window — and an expired delegation authorizes nobody, so the answer is the root DID. Until 0.3.1 every record in this group carried `notBefore: 0` and `notAfter: null`, which meant deleting the window check outright left both references green: `checkNow` was passed to a comparison that no case could make come out differently."
+        },
+        {
+          "name": "not-yet-valid-window",
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 1784277281,
+            "notAfter": 1784280881,
+            "ts": 1784273681,
+            "sig": "KzwNZXZozv/gqAFwcdpgFoejqSAgGuDpHhRlGHlE9o25PeP2iC3oixmxy09xekJpVJgya7WhMZi52fY4B4ICBQ=="
+          },
+          "expect": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "mustNotResolveTo": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "why": "`notBefore` is an hour AFTER checkNow — the other end of the same window, and its own case because `now > notAfter` and `now < notBefore` are two comparisons and an implementation can carry one without the other. A delegation that has not begun is not a delegation yet; pre-dating one is how a key that will be published later is used today."
         }
       ],
       "refuse": [
@@ -1477,5 +1648,5 @@
       }
     ]
   },
-  "rejectNote": "Each case MUST be rejected by your receiver (`mustReject`). `category` is language-neutral guidance, NOT core's -32xxx — your own error taxonomy is yours. message: verified with the key DERIVED FROM `from` (crypto.verify_envelope) — and note that `wire-names-its-own-recipient` carries `verifierNamesNoRecipient`, which means the verifier must be called with NO recipient of its own; naming one makes the case pass for the wrong reason. encoding: raw document BYTES as hex, refused at the parse boundary (see that group's own note) with an `accept` half that must still canonicalize; invite: shared/invite.verify_invite, judged at the case's `checkNow`; claim: signature MUST verify AND a one-time nonce THIS device issued must be consumed before any trust is written. ONE case cannot be a static vector: `claim-spent-nonce` (a replayed claim whose nonce was already consumed) needs receiver state, so it is a REQUIRED client unit test, not pinned here — the same boundary as cryptobox's random-nonce seal."
+  "rejectNote": "Each case MUST be rejected by your receiver (`mustReject`). `category` is language-neutral guidance, NOT core's -32xxx — your own error taxonomy is yours. did: the did:key CODEC (publicKeyHexFromDid / public_from_did / PublicKeyFromDID / public_key_from_did) — the multicodec and the exact 34 decoded bytes, each case shaped so ONE missing check fails it; there is deliberately NO over-long case, because no over-long base58 decodes to 34 bytes and such a vector would be green in an implementation with no length cap at all (the cap is real, it is 512 in all four references, and it buys CPU rather than a verdict — spec §2). cardpub: the card envelope verifier, with `expectedDid` at the TOP LEVEL of the case because it is the CALLER's idea of whose card was asked for; a verifier that returns the card without checking the signature passes every positive case in this file and fails all three of these. message: verified with the key DERIVED FROM `from` (crypto.verify_envelope) — and note that `wire-names-its-own-recipient` carries `verifierNamesNoRecipient`, which means the verifier must be called with NO recipient of its own; naming one makes the case pass for the wrong reason. encoding: raw document BYTES as hex, refused at the parse boundary (see that group's own note) with an `accept` half that must still canonicalize; invite: shared/invite.verify_invite, judged at the case's `checkNow`; claim: signature MUST verify AND a one-time nonce THIS device issued must be consumed before any trust is written. ONE case cannot be a static vector: `claim-spent-nonce` (a replayed claim whose nonce was already consumed) needs receiver state, so it is a REQUIRED client unit test, not pinned here — the same boundary as cryptobox's random-nonce seal."
 }

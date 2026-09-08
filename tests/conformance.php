@@ -257,9 +257,17 @@ if (isset($rawDecoded->bindingV2)) {
             $case->deviceDid), "bindingV2[{$n}] is expired one second later");
     }
 
+    // THE EXPECTED DEVICE COMES FROM THE CASE, never from the binding. `expectedDeviceDid`
+    // was added upstream in 0.3.1 for `binding-lifted-to-another-device`, whose binding is
+    // BYTE-IDENTICAL to a valid one — only the caller's expectation differs. A loop that
+    // passed no expectation (this one, until now) or that read the device DID off the
+    // binding could never fail that case, which is the anti-copy pin the whole field exists
+    // for: a binding lifted onto another sender's message must not verify.
     foreach ($bv->reject as $case) {
-        check(!Wire::verifyDeviceBindingV2($case->input, $checkNow),
-            "bindingV2 reject[{$case->name}] is refused");
+        $expected = $case->expectedDeviceDid ?? null;
+        check(!Wire::verifyDeviceBindingV2($case->input, $checkNow, $expected),
+            "bindingV2 reject[{$case->name}] is refused"
+            . ($expected === null ? '' : ' (as a binding for someone else\'s device)'));
     }
 }
 
