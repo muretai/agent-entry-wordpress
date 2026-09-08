@@ -203,7 +203,9 @@ final class Plugin
      * generated answer filter `muretai_agent_entry_reply` and take that decision
      * explicitly.
      *
-     * @param array $env the VERIFIED envelope: peer_did, text, context_id, account, ...
+     * @param array $env the VERIFIED envelope: peer_did, owner_did, text, context_id,
+     *                   account, ... `peer_did` is the DEVICE that signed; `owner_did` is
+     *                   the account it proved with a v2 binding, or null when unbound.
      */
     public function respond(array $env): string
     {

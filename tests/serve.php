@@ -89,6 +89,16 @@ final class FileStore extends \stdClass implements \Muretai\AgentEntry\Store
         return $this->data['ledger'][$did] ?? null;
     }
 
+    public function putAccount(string $did, ?array $row): void
+    {
+        if ($row === null) {
+            unset($this->data['ledger'][$did]);
+        } else {
+            $this->data['ledger'][$did] = $row;
+        }
+        $this->flush();
+    }
+
     public function getDeviceOwner(string $deviceDid): ?string
     {
         return $this->data['pins'][$deviceDid] ?? null;

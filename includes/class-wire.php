@@ -61,6 +61,23 @@ final class Wire
     /** Whole-body ceiling. Larger bodies are refused at the transport with 413. */
     public const MAX_BODY_BYTES = 1048576;
 
+    /**
+     * `messageId` ceiling, in UTF-8 BYTES — the same number and the same unit as
+     * `MAX_MESSAGE_ID_BYTES` in the JavaScript door.
+     *
+     * The id is the replay table's KEY and was bounded only by the 1 MiB body cap, so a
+     * stranger could hand the door most of a megabyte of key per request and it would be
+     * held for REPLAY_TTL_S. `WpdbStore::seenMessage` hashes the id to a fixed width, so
+     * the KEY is safe here — but a hash bounds the key, not the REQUEST, and the shape
+     * gate is what says how big a messageId may be.
+     *
+     * A DOOR-LOCAL RULE, stated rather than hidden: the seam pins MAX_TEXT_BYTES and
+     * MAX_BODY_BYTES and not this, so until an agent-seam release adds it the Python
+     * reference still accepts an id all three doors refuse — a divergence chosen
+     * knowingly, and one that errs towards refusing.
+     */
+    public const MAX_MESSAGE_ID_BYTES = 256;
+
     /** Accepted clock skew, seconds, in either direction. */
     public const CLOCK_WINDOW_S = 300;
 
@@ -566,6 +583,323 @@ final class Wire
             'ts' => $ts,
             'sig' => base64_encode(sodium_crypto_sign_detached($payload, $secret)),
         ];
+    }
+
+    // ------------------------------------------------- device-key binding v2 (T102)
+    //
+    // THE ACCOUNT LAYER. A message may carry a countersigned DeviceKeyBinding v2 in
+    // `metadata.binding`, proving that the DEVICE DID which signed it belongs to an OWNER
+    // DID — which is how one person's phone, laptop and watch are one customer rather than
+    // three strangers. This is the third implementation of
+    // shared/keybinding.verify_device_binding_v2 (Python) / `verifyDeviceBindingV2`
+    // (JavaScript), and it is byte-pinned by the vendored vectors' `bindingV2` group.
+    //
+    // TWO SIGNATURES OVER THE SAME BYTES: the OWNER (root) signs, and the DEVICE
+    // countersigns. The countersignature is the whole point of v2 — without it a foreign
+    // owner could claim someone else's device by signing a statement about it. `typ` lives
+    // INSIDE the signed bytes (domain separation), and ts/validUntil are INTEGERS because a
+    // float's repr is bytes only Python reproduces.
+
+    /** `typ` of the countersigned account binding (shared/keybinding.BINDING_V2_TYP). */
+    public const BINDING_V2_TYP = 'muretai/devicebinding/2';
+
+    /**
+     * SPKI DER prefix for a P-256 public key carrying a COMPRESSED SEC1 point (33 bytes):
+     * SEQUENCE { SEQUENCE { id-ecPublicKey, prime256v1 }, BIT STRING (34) }. OpenSSL accepts
+     * compressed points on both PHP baselines this plugin supports (measured: 1.1.1 under
+     * php:7.4 and 3.x under php:8.3), so the did:key point embeds directly and no point
+     * decompression — which would need GMP, absent from stock builds — is required.
+     */
+    private const P256_SPKI_PREFIX =
+        "\x30\x39\x30\x13\x06\x07\x2a\x86\x48\xce\x3d\x02\x01\x06\x08\x2a\x86\x48\xce\x3d"
+        . "\x03\x01\x07\x03\x22\x00";
+
+    /** The longest ASN.1 DER an ECDSA-P-256 signature can be: SEQUENCE of two INTEGERs of
+     *  at most 33 content bytes each (32 plus the 0x00 a high bit forces) plus tag+length.
+     *  A ceiling, not an equality: r and s shrink when they have leading zero bytes. */
+    private const MAX_P256_DER_SIG_BYTES = 72;
+
+    /** True when this host can verify a P-256 (ES256) signature at all. Stock PHP builds
+     *  carry ext-openssl, but it is a compile-time option, so this is a question and not an
+     *  assumption — see Entry::resolveAccount for what a "no" costs. */
+    public static function p256Available(): bool
+    {
+        return extension_loaded('openssl')
+            && function_exists('openssl_verify')
+            && function_exists('openssl_pkey_get_public');
+    }
+
+    /**
+     * `did:key:z…` -> ['curve' => 'ed25519'|'p256', 'key' => raw bytes].
+     *
+     * The curve-agnostic sibling of `publicKeyFromDid`, which stays Ed25519-only on
+     * purpose: the message envelope is always Ed25519 and the conformance walk asserts a
+     * p256 DID is REFUSED there. Only the BINDING has a second curve, because an owner root
+     * may be a Secure Enclave / WebAuthn key.
+     *
+     * @return array{curve:string,key:string}
+     */
+    public static function decodeDidKey(string $did): array
+    {
+        if (strncmp($did, 'did:key:z', 9) !== 0) {
+            throw new \InvalidArgumentException('unsupported DID method');
+        }
+        $raw = self::b58decode(substr($did, 9));
+        if (strlen($raw) === 34 && $raw[0] === "\xed" && $raw[1] === "\x01") {
+            return ['curve' => 'ed25519', 'key' => substr($raw, 2)];    // 0xed01
+        }
+        if (strlen($raw) === 35 && $raw[0] === "\x80" && $raw[1] === "\x24") {
+            return ['curve' => 'p256', 'key' => substr($raw, 2)];       // varint(0x1200)
+        }
+        throw new \InvalidArgumentException('unsupported did:key multicodec');
+    }
+
+    /** The curve a did:key names, for a caller that needs the curve before the key. */
+    public static function didKeyCurve(string $did): string
+    {
+        return self::decodeDidKey($did)['curve'];
+    }
+
+    /** One ASN.1 DER INTEGER from a fixed-width big-endian ECDSA component. */
+    private static function derInteger(string $b): string
+    {
+        $b = ltrim($b, "\x00");
+        if ($b === '') {
+            $b = "\x00";
+        }
+        if ((ord($b[0]) & 0x80) !== 0) {
+            $b = "\x00" . $b;               // DER INTEGERs are signed; keep it positive
+        }
+        return "\x02" . chr(strlen($b)) . $b;
+    }
+
+    /**
+     * Verify an ES256 signature over `$message` for a 33-byte compressed P-256 point.
+     * Accepts BOTH encodings clients emit, exactly as the two references do: raw r||s (64
+     * bytes, WebCrypto / IEEE P1363) and ASN.1 DER (Secure Enclave / WebAuthn). Never
+     * throws.
+     */
+    private static function p256Verify(string $compPoint, string $signature, string $message): bool
+    {
+        if (strlen($compPoint) !== 33 || !self::p256Available()) {
+            return false;
+        }
+        $pem = "-----BEGIN PUBLIC KEY-----\n"
+            . chunk_split(base64_encode(self::P256_SPKI_PREFIX . $compPoint), 64, "\n")
+            . "-----END PUBLIC KEY-----\n";
+        $key = @openssl_pkey_get_public($pem);
+        if ($key === false) {
+            while (@openssl_error_string() !== false) {
+                // Drain the queue: a failure here must not surface on someone else's verify.
+            }
+            return false;
+        }
+        if (strlen($signature) === 64) {
+            $seq = self::derInteger(substr($signature, 0, 32)) . self::derInteger(substr($signature, 32));
+            $signature = "\x30" . chr(strlen($seq)) . $seq;
+        }
+        $ok = @openssl_verify($message, $signature, $key, OPENSSL_ALGO_SHA256);
+        while (@openssl_error_string() !== false) {
+            // As above: openssl_verify() pushes onto the same queue for a malformed DER.
+        }
+        if (PHP_VERSION_ID < 80000 && is_resource($key)) {
+            openssl_free_key($key);
+        }
+        return $ok === 1;
+    }
+
+    /** Curve-dispatching signature verify against a did:key — a binding's owner may be
+     *  Ed25519 OR P-256; the device is always Ed25519. Total and fail-closed. */
+    private static function verifyDidSig(string $did, string $signature, string $message): bool
+    {
+        try {
+            $k = self::decodeDidKey($did);
+            if ($k['curve'] === 'ed25519') {
+                return strlen($signature) === SODIUM_CRYPTO_SIGN_BYTES
+                    && sodium_crypto_sign_verify_detached($signature, $message, $k['key']);
+            }
+            return self::p256Verify($k['key'], $signature, $message);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /** The canonical bytes BOTH keys sign (shared/keybinding._binding_v2_payload). Keys are
+     *  sorted by code point, so the order written here is irrelevant; the emitted bytes are
+     *  {"deviceDid":…,"rootDid":…,"ts":…,"typ":…,"validUntil":…}. */
+    public static function bindingV2Payload(string $rootDid, string $deviceDid, int $ts,
+                                            int $validUntil): string
+    {
+        return self::canonicalJson([
+            'typ' => self::BINDING_V2_TYP,
+            'rootDid' => $rootDid,
+            'deviceDid' => $deviceDid,
+            'ts' => $ts,
+            'validUntil' => $validUntil,
+        ]);
+    }
+
+    /** An integer this wire can render — the same bound `canonicalJson` enforces, and the
+     *  same predicate as JavaScript's `Number.isSafeInteger`. @param mixed $v */
+    private static function isSafeInt($v): bool
+    {
+        return is_int($v) && $v >= -self::MAX_SAFE_INT && $v <= self::MAX_SAFE_INT;
+    }
+
+    /**
+     * Verify a v2 binding. TOTAL on untrusted input: returns false, never throws — this
+     * runs on wire metadata a stranger chose.
+     *
+     * ALL of these must hold, in this order (the cheap structural pins before any crypto):
+     * `typ` matches; rootDid and deviceDid are non-empty strings; ts and validUntil are
+     * INTEGERS inside the safe range; `$expectedDeviceDid`, when given, equals deviceDid
+     * (the anti-copy pin — a binding lifted off another sender's message fails); `$now`
+     * given and validUntil non-zero -> not expired; the OWNER signed the canonical five
+     * fields; the DEVICE countersigned the same bytes.
+     *
+     * Both signature lengths are BOUNDED before they reach a verifier. The device is always
+     * Ed25519, so its countersignature is exactly 64 bytes and anything else is not a
+     * countersignature. The owner is the one signature here that is not always 64: a
+     * Secure-Enclave owner emits ~70-72 bytes of DER, so the bound is read per curve from
+     * the owner's own did:key (junk there throws, and the enclosing catch answers false).
+     *
+     * @param mixed $binding a decoded JSON object: an array, or a stdClass
+     * @param int|float|null $now epoch seconds, or null to skip the expiry check
+     */
+    public static function verifyDeviceBindingV2($binding, $now = null,
+                                                 ?string $expectedDeviceDid = null): bool
+    {
+        try {
+            if ($binding instanceof \stdClass) {
+                $binding = get_object_vars($binding);
+            }
+            if (!is_array($binding)) {
+                return false;
+            }
+            if (($binding['typ'] ?? null) !== self::BINDING_V2_TYP) {
+                return false;
+            }
+            $rootDid = $binding['rootDid'] ?? null;
+            $deviceDid = $binding['deviceDid'] ?? null;
+            $ts = $binding['ts'] ?? null;
+            $validUntil = $binding['validUntil'] ?? null;
+            if (!is_string($rootDid) || $rootDid === '') {
+                return false;
+            }
+            if (!is_string($deviceDid) || $deviceDid === '') {
+                return false;
+            }
+            if (!self::isSafeInt($ts) || !self::isSafeInt($validUntil)) {
+                return false;
+            }
+            if ($expectedDeviceDid !== null && $deviceDid !== $expectedDeviceDid) {
+                return false;
+            }
+            if ($now !== null && $validUntil !== 0 && $now > $validUntil) {
+                return false;
+            }
+            $sig = self::strictB64(is_string($binding['sig'] ?? null) ? $binding['sig'] : null);
+            $deviceSig = self::strictB64(
+                is_string($binding['deviceSig'] ?? null) ? $binding['deviceSig'] : null);
+            if ($sig === null || $deviceSig === null) {
+                return false;
+            }
+            if (strlen($deviceSig) !== SODIUM_CRYPTO_SIGN_BYTES) {
+                return false;
+            }
+            $ownerCurve = self::decodeDidKey($rootDid)['curve'];
+            if ($ownerCurve === 'ed25519'
+                ? strlen($sig) !== SODIUM_CRYPTO_SIGN_BYTES
+                : strlen($sig) > self::MAX_P256_DER_SIG_BYTES) {
+                return false;
+            }
+            $payload = self::bindingV2Payload($rootDid, $deviceDid, $ts, $validUntil);
+            return self::verifyDidSig($rootDid, $sig, $payload)
+                && self::verifyDidSig($deviceDid, $deviceSig, $payload);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /** Sign a v2 binding with an owner seed and a device seed. TESTS AND TOOLING ONLY — a
+     *  door verifies bindings, it never mints them — but a verifier nobody can produce
+     *  input for is a verifier nobody can prove says yes. */
+    public static function makeDeviceBindingV2(string $ownerSeed, string $deviceSeed,
+                                               int $ts, int $validUntil): array
+    {
+        $rootDid = self::didFromSeed($ownerSeed);
+        $deviceDid = self::didFromSeed($deviceSeed);
+        $payload = self::bindingV2Payload($rootDid, $deviceDid, $ts, $validUntil);
+        $ownerSecret = sodium_crypto_sign_secretkey(sodium_crypto_sign_seed_keypair($ownerSeed));
+        $deviceSecret = sodium_crypto_sign_secretkey(sodium_crypto_sign_seed_keypair($deviceSeed));
+        return [
+            'typ' => self::BINDING_V2_TYP,
+            'rootDid' => $rootDid,
+            'deviceDid' => $deviceDid,
+            'ts' => $ts,
+            'validUntil' => $validUntil,
+            'sig' => base64_encode(sodium_crypto_sign_detached($payload, $ownerSecret)),
+            'deviceSig' => base64_encode(sodium_crypto_sign_detached($payload, $deviceSecret)),
+        ];
+    }
+
+    // ------------------------------------------------------- the messageId shape rule
+
+    /**
+     * PYTHON'S WHITESPACE SET, code point for code point. `str.strip()` (which
+     * `shared/protocol.message_id_ok` applies) strips exactly these; PHP's `trim()` strips
+     * a DIFFERENT and much narrower set, and the difference is not cosmetic:
+     *
+     *   - PHP's default list is " \t\n\r\0\x0B" — BYTES. It misses FORM FEED (0x0c), which
+     *     both other implementations strip, misses every non-ASCII space, and strips NUL,
+     *     which neither of the others does.
+     *   - Python additionally strips 0x1c-0x1f (the file/group/record/unit separators) and
+     *     0x85 (NEL); JavaScript's `trim()` does not.
+     *   - JavaScript additionally strips 0xfeff (the BOM / zero-width no-break space);
+     *     Python does not.
+     *   - NEITHER strips 0x200b (ZERO WIDTH SPACE), so `"\u{200b}"` is a legal messageId on
+     *     all three. It looks empty and is not; that is the contract, not an oversight.
+     *
+     * So `trim($id) === ''` would have been a fourth answer. This list is Python's, because
+     * Python is the reference the other two are being aligned to.
+     */
+    private const PY_STRIP_CODEPOINTS = [
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x85, 0xa0,
+        0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
+        0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+    ];
+
+    /**
+     * True when `$messageId` can key the replay table — the PHP twin of
+     * `shared/protocol.message_id_ok`, whose whole body is
+     * `isinstance(message_id, str) and bool(message_id.strip())`.
+     *
+     * WHY WHITESPACE IS NOT A MESSAGE ID. It is a SIGNED field and the dedup key. An id of
+     * three spaces was accepted here and by the JavaScript door — each answering with a
+     * signed reply and minting a customer row — while the Python reference refused it; the
+     * same bytes, two verdicts, which is the double-book class this contract exists to
+     * close. It is also a usable dedup key on the side that accepts it and not a message at
+     * all on the side that does not, so the replay table itself disagrees.
+     *
+     * @param mixed $messageId
+     */
+    public static function messageIdOk($messageId): bool
+    {
+        if (!is_string($messageId) || $messageId === '') {
+            return false;
+        }
+        if (!self::isValidUtf8($messageId)) {
+            // Not decodable text, so not whitespace either: this gate says yes and the
+            // canonicaliser refuses it a step later, where the refusal names the real
+            // reason. `codePoints` below assumes well-formed UTF-8.
+            return true;
+        }
+        foreach (self::codePoints($messageId) as $cp) {
+            if (!in_array($cp, self::PY_STRIP_CODEPOINTS, true)) {
+                return true;            // one non-whitespace code point is enough
+            }
+        }
+        return false;                   // empty once stripped: `bool("".strip())` is False
     }
 
     // ---------------------------------------------------------------- misc

@@ -106,6 +106,9 @@ final class Entry
     /** @var array|null AE-30: the site's own order of its ways in, validated; null = not configured */
     private $prefer;
 
+    /** @var array<string,true> devices already warned about an unverifiable P-256 owner */
+    private $p256Unbound = [];
+
     /** The kinds a visitor can take into a site, and the conditions a site may attach.
      *  Must match PREFER_KINDS / PREFER_WHEN in the JS module and the Python twin. */
     public const PREFER_KINDS = ['page', 'card', 'mcp'];
@@ -760,8 +763,25 @@ final class Entry
         $text = self::extractText($msg);
         $messageId = $msg['messageId'] ?? null;
         $contextId = $msg['contextId'] ?? null;
-        if (!is_string($messageId) || $messageId === ''
+        if (!is_string($messageId)
             || ($contextId !== null && !is_string($contextId)) || $text === null) {
+            return $this->rpcError($id, self::E_INVALID_PARAMS, 'malformed message');
+        }
+        // 4b. THE messageId BOUND, before the pattern below runs over it. The id is the
+        //     replay table's key and was bounded only by the 1 MiB body cap. The store
+        //     hashes it, so the KEY was never the exposure — the REQUEST was.
+        if (strlen($messageId) > Wire::MAX_MESSAGE_ID_BYTES) {
+            return $this->rpcError($id, self::E_INVALID_PARAMS,
+                'messageId is over the ' . Wire::MAX_MESSAGE_ID_BYTES . '-byte limit');
+        }
+        // 4c. `Wire::messageIdOk` and not `$messageId === ''`: a WHITESPACE-ONLY id is not
+        //     a message id either. It is a SIGNED field and the replay table's key, and
+        //     this door used to answer three spaces with a signed reply and a customer row
+        //     while the Python reference refused the identical bytes — the same double-book
+        //     class the rest of this ladder exists to close. `trim()` is NOT the rule (its
+        //     byte list is a fourth answer, narrower than either reference's); see
+        //     Wire::messageIdOk for the 29 code points and who strips what.
+        if (!Wire::messageIdOk($messageId)) {
             return $this->rpcError($id, self::E_INVALID_PARAMS, 'malformed message');
         }
 
@@ -815,7 +835,26 @@ final class Entry
                 'duplicate messageId (replay) detected');
         }
 
-        // 11. the rate ceilings. Being attributable is not being bounded: a signature
+        // 11. THE ACCOUNT LAYER (T102). An OPTIONAL countersigned v2 binding in
+        //     `metadata.binding` collapses an owner's device DIDs to ONE account, so a
+        //     person's phone and laptop are one customer. Absent binding: the device DID,
+        //     byte-identical to a door that never heard of bindings. PRESENT-but-invalid:
+        //     FAIL CLOSED, with the same -32001 the signature answers and no ledger row —
+        //     never a silent downgrade to unbound, which would let anyone strip a binding
+        //     they could not forge and still be served.
+        //
+        //     Here and not earlier: it reads and WRITES the pin table, which is state an
+        //     authenticated sender depends on, so the signature and the replay check come
+        //     first. Here and not later: the ceilings below and the row above must be
+        //     spent on the ACCOUNT, or an owner's devices each get their own.
+        $acct = $this->resolveAccount($meta['binding'] ?? null, $from);
+        if (!$acct['ok']) {
+            return $this->rpcError($id, self::E_UNAUTHENTICATED, $acct['reason']);
+        }
+        $account = $acct['account'];
+        $ownerDid = $account !== $from ? $account : null;
+
+        // 12. the rate ceilings. Being attributable is not being bounded: a signature
         //     identifies a sender, it does not stop them, and the reply may cost far more
         //     than the verify did.
         if ($this->ratePerMinTotal > 0
@@ -823,17 +862,23 @@ final class Entry
             return $this->rpcError($id, self::E_RATE_LIMITED,
                 'this entry is at its reply ceiling; try again shortly');
         }
-        if ($this->ratePerMin > 0 && !$this->store->allowRate($from, $this->ratePerMin)) {
+        if ($this->ratePerMin > 0 && !$this->store->allowRate($account, $this->ratePerMin)) {
             return $this->rpcError($id, self::E_RATE_LIMITED,
                 'you are at your reply ceiling; try again shortly');
         }
 
-        // 12. FIRST CONTACT IS ACCOUNT CREATION. There is no signup form: the sender just
+        // 13. FIRST CONTACT IS ACCOUNT CREATION. There is no signup form: the sender just
         //     proved control of a key, which is strictly more than an email link proves.
-        $row = $this->store->noteContact($from);
+        //     Keyed by the ACCOUNT — the owner when a binding proved one — so sibling
+        //     devices are one customer and not three strangers.
+        $row = $this->store->noteContact($account);
 
         $env = [
+            // `peer_did` STAYS the device that signed; `owner_did` is the account it
+            // proved, or null when unbound. Both facts are honest and the schema says
+            // which is which — collapsing them would lose the device a message came from.
             'peer_did' => $from,
+            'owner_did' => $ownerDid,
             'text' => $text,
             'context_id' => $contextId,
             'message_id' => $messageId,
@@ -862,6 +907,170 @@ final class Entry
             'id' => $id,
             'result' => $this->signedReply($from, $replyText, $contextId, $messageId),
         ]);
+    }
+
+    // ---------------------------------------------------------------- the account layer
+
+    /**
+     * The ACCOUNT (owner) DID this message belongs to — the PHP twin of
+     * `resolveAccount` in the JavaScript door and `_resolve_account` in the Python
+     * reference. Returns ['ok' => true, 'account' => $did] or ['ok' => false, 'reason' => …].
+     *
+     * ABSENT binding -> the device DID, byte-identical to before this rung existed.
+     * PRESENT binding -> every check must hold or it fails closed with a distinct reason.
+     * The cheap structural pins produce those reasons; the two SIGNATURES are left to
+     * `Wire::verifyDeviceBindingV2`, the one contract all three implementations
+     * re-implement and must never disagree about.
+     *
+     * TOFU, and A PIN NEVER MOVES: the first valid binding pins device->owner; a later
+     * binding for the same device naming a DIFFERENT owner is refused, because there is no
+     * legitimate re-ownership — a new owner means a new device key. On that first pin an
+     * earlier UNBOUND row for the device folds into the owner row ONCE, never the reverse,
+     * or stripping a binding would become a way to read an owner's history.
+     *
+     * @param mixed $binding
+     * @return array{ok:bool,account?:string,reason?:string}
+     */
+    private function resolveAccount($binding, string $from): array
+    {
+        if ($binding === null) {
+            return ['ok' => true, 'account' => $from];
+        }
+        // json_decode(assoc) renders BOTH a JSON object and a JSON array as a PHP array, so
+        // a populated list is the one shape that can still be told apart. A JSON `[]`
+        // therefore reads here as an empty object and is refused one line lower for its
+        // `typ` instead — a different REASON STRING from the twins, never a different
+        // verdict: -32001 and no row, either way.
+        if (!is_array($binding)
+            || ($binding !== [] && array_keys($binding) === range(0, count($binding) - 1))) {
+            return ['ok' => false, 'reason' => 'attached device binding is malformed'];
+        }
+        if (($binding['typ'] ?? null) !== Wire::BINDING_V2_TYP) {
+            return ['ok' => false, 'reason' => 'attached device binding has an unsupported typ'];
+        }
+        $rootDid = $binding['rootDid'] ?? null;
+        if (!is_string($rootDid) || $rootDid === '') {
+            return ['ok' => false, 'reason' => 'attached device binding names no owner'];
+        }
+        if (($binding['deviceDid'] ?? null) !== $from) {
+            // The anti-copy pin: a binding lifted off another device's message.
+            return ['ok' => false, 'reason' => 'device binding does not name the sender'];
+        }
+        // NORMALISE an integer-valued float before verifying. JSON has one number type: a
+        // sender writing `1.0` — or any JavaScript runtime re-serialising a Number —
+        // produces a float here, while `JSON.parse` in the JS twin yields the Number 1.
+        // Refusing it here and accepting it there made the SAME POST create a customer on
+        // one implementation and 401 on the other. A TRUE fraction stays refused by all
+        // three: it cannot be canonicalised identically outside Python.
+        $ts = self::intEpoch($binding['ts'] ?? null);
+        $validUntil = self::intEpoch($binding['validUntil'] ?? null);
+        if ($ts === null || $validUntil === null) {
+            return ['ok' => false, 'reason' => 'device binding timestamps must be integers'];
+        }
+        $binding['ts'] = $ts;
+        $binding['validUntil'] = $validUntil;
+        $now = time();
+        if ($ts > $now + Wire::CLOCK_WINDOW_S) {
+            return ['ok' => false, 'reason' => 'device binding ts is in the future'];
+        }
+        if ($validUntil !== 0 && $now > $validUntil) {
+            return ['ok' => false, 'reason' => 'device binding has expired'];
+        }
+        try {
+            $ownerCurve = Wire::didKeyCurve($rootDid);
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'reason' => 'device binding owner DID is unparseable'];
+        }
+        // A P-256 owner root on a host with no OpenSSL: the only unverifiable part is the
+        // OWNER signature, and the two honest outcomes are "unbound" or "rejected".
+        // Rejecting would refuse an envelope-valid message for a gap on OUR side, so this
+        // takes the Python reference's documented posture exactly — treat the sender as
+        // UNBOUND (never merged unverified), and say so once. With OpenSSL present, which
+        // is every stock PHP build, the binding is fully verified as the JS door verifies
+        // it and this branch never runs.
+        if ($ownerCurve === 'p256' && !Wire::p256Available()) {
+            $this->noteP256Unbound($from);
+            return ['ok' => true, 'account' => $from];
+        }
+        if (!Wire::verifyDeviceBindingV2($binding, $now, $from)) {
+            return ['ok' => false, 'reason' => 'device binding does not verify'];
+        }
+        $pinned = $this->store->getDeviceOwner($from);
+        if ($pinned !== null && $pinned !== $rootDid) {
+            return ['ok' => false, 'reason' => 'device is already bound to a different owner '
+                . '(a device DID is never re-owned — a new owner means a new device key)'];
+        }
+        if ($pinned === null) {
+            // The store refuses to MOVE a pin, so a false here means a concurrent request
+            // pinned this device to somebody else between the read above and this write.
+            // PHP has no lock to hold across the two, so the store's refusal is the lock,
+            // and losing the race fails closed with the same reason it would have read.
+            if (!$this->store->putDeviceOwner($from, $rootDid)) {
+                return ['ok' => false, 'reason' => 'device is already bound to a different owner '
+                    . '(a device DID is never re-owned — a new owner means a new device key)'];
+            }
+            $this->foldDeviceIntoOwner($from, $rootDid);
+        }
+        return ['ok' => true, 'account' => $rootDid];
+    }
+
+    /**
+     * When a device that ALREADY has an unbound ledger row first proves its owner, move
+     * that row's history onto the owner — ONCE, and never the reverse.
+     */
+    private function foldDeviceIntoOwner(string $deviceDid, string $ownerDid): void
+    {
+        $devRow = $this->store->getAccount($deviceDid);
+        if ($devRow === null) {
+            return;
+        }
+        $this->store->putAccount($deviceDid, null);
+        $ownerRow = $this->store->getAccount($ownerDid);
+        if ($ownerRow === null) {
+            $devRow['did'] = $ownerDid;
+            $this->store->putAccount($ownerDid, $devRow);
+            return;
+        }
+        $ownerRow['messages'] = (int) ($ownerRow['messages'] ?? 0)
+            + (int) ($devRow['messages'] ?? 0);
+        $ownerRow['first_seen'] = min((int) $ownerRow['first_seen'], (int) $devRow['first_seen']);
+        $this->store->putAccount($ownerDid, $ownerRow);
+    }
+
+    /** Say once per device that a P-256 owner binding could not be verified on this host.
+     *  Bounded, because the key is attacker-chosen. */
+    private function noteP256Unbound(string $deviceDid): void
+    {
+        if (isset($this->p256Unbound[$deviceDid])) {
+            return;
+        }
+        if (count($this->p256Unbound) > 512) {
+            $this->p256Unbound = [];
+        }
+        $this->p256Unbound[$deviceDid] = true;
+        error_log('muretai agent entry: ' . substr($deviceDid, 0, 24)
+            . '… presents a P-256 owner binding but this PHP has no OpenSSL — treating the '
+            . 'sender as UNBOUND (never merging unverified).');
+    }
+
+    /**
+     * An integer epoch, or null. Accepts an integer-valued float (JSON has one number type,
+     * and a JavaScript re-serialisation yields one) and normalises it; refuses a true
+     * fraction, a non-number, and any magnitude this wire cannot render — the same bound
+     * `Number.isSafeInteger` applies in the JS twin.
+     *
+     * @param mixed $v
+     */
+    private static function intEpoch($v): ?int
+    {
+        if (is_int($v)) {
+            return ($v >= -Wire::MAX_SAFE_INT && $v <= Wire::MAX_SAFE_INT) ? $v : null;
+        }
+        if (is_float($v) && is_finite($v) && floor($v) === $v
+            && $v >= -Wire::MAX_SAFE_INT && $v <= Wire::MAX_SAFE_INT) {
+            return (int) $v;
+        }
+        return null;
     }
 
     /**

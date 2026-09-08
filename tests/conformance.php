@@ -181,6 +181,155 @@ foreach ($rawDecoded->cardpub as $case) {
     );
 }
 
+// ------------------------------------------------------------------ device binding v2
+//
+// THE ACCOUNT LAYER, which this plugin shipped a pin table for and never filled. A message
+// may carry a countersigned DeviceKeyBinding v2 proving the DEVICE key that signed it
+// belongs to an OWNER; the other two doors refuse a present-but-INVALID one with -32001 and
+// mint no row, and this door used to answer it with a signed reply and a customer row.
+//
+// These vectors are the same ones that hold the JavaScript door and the Python reference,
+// so they are the cross-implementation half. The MINT check is the sharpest of them: the
+// seeds are in the fixture, Ed25519 is deterministic, so PHP's own signatures over the
+// canonical payload must come out byte-identical to the recorded ones — a canonicaliser
+// that put one field in the wrong place could not pass it.
+
+if (isset($rawDecoded->bindingV2)) {
+    $bv = $rawDecoded->bindingV2;
+    $checkNow = $bv->checkNow;
+    $otherDid = 'did:key:z6MkwgaR63138bEEgad7uk993KMX54vBA6KTB4sFhCPnSB2e';
+
+    foreach ($bv->cases as $case) {
+        $n = $case->name;
+        $got = Wire::bindingV2Payload($case->rootDid, $case->deviceDid, $case->ts,
+            $case->validUntil);
+        check($got === $case->bindingPayload, "bindingV2[{$n}] signed payload",
+            'got ' . var_export($got, true));
+
+        // The control that keeps every refusal below honest: a GENUINE binding must verify.
+        check(Wire::verifyDeviceBindingV2($case->binding, $checkNow, $case->deviceDid),
+            "bindingV2[{$n}] verifies — this suite can still say YES");
+
+        // Re-mint from the fixture's own seeds: both signatures byte-for-byte.
+        $minted = Wire::makeDeviceBindingV2(hex2bin($case->ownerSeed),
+            hex2bin($case->deviceSeed), $case->ts, $case->validUntil);
+        check($minted['sig'] === $case->binding->sig,
+            "bindingV2[{$n}] PHP re-mints the OWNER signature byte for byte",
+            'got ' . $minted['sig']);
+        check($minted['deviceSig'] === $case->binding->deviceSig,
+            "bindingV2[{$n}] PHP re-mints the DEVICE countersignature byte for byte",
+            'got ' . $minted['deviceSig']);
+
+        // The anti-copy pin: this binding lifted onto another sender's message.
+        check(!Wire::verifyDeviceBindingV2($case->binding, $checkNow, $otherDid),
+            "bindingV2[{$n}] is refused when it does not name the sender");
+
+        // Each signature must be CHECKED, not merely present. One flipped byte in either.
+        foreach (['sig', 'deviceSig'] as $field) {
+            $tampered = clone $case->binding;
+            $raw = base64_decode($case->binding->$field, true);
+            $raw[0] = chr(ord($raw[0]) ^ 0x01);
+            $tampered->$field = base64_encode($raw);
+            check(!Wire::verifyDeviceBindingV2($tampered, $checkNow, $case->deviceDid),
+                "bindingV2[{$n}] with a tampered `{$field}` is refused");
+        }
+
+        // ...and one flipped byte in the SIGNED fields, which no signature then covers.
+        $moved = clone $case->binding;
+        $moved->ts = $case->ts + 1;
+        check(!Wire::verifyDeviceBindingV2($moved, $checkNow, $case->deviceDid),
+            "bindingV2[{$n}] with a moved `ts` is refused");
+    }
+
+    // EXPIRY is `now > validUntil`, and `validUntil: 0` means no expiry at all — the two
+    // spellings the twins agree on, and the difference between a binding that lapses and
+    // one that never does.
+    foreach ($bv->cases as $case) {
+        $n = $case->name;
+        if ($case->validUntil === 0) {
+            check(Wire::verifyDeviceBindingV2($case->binding, $checkNow + 10 * 365 * 86400,
+                $case->deviceDid), "bindingV2[{$n}] validUntil 0 never expires");
+            continue;
+        }
+        check(Wire::verifyDeviceBindingV2($case->binding, $case->validUntil, $case->deviceDid),
+            "bindingV2[{$n}] is still valid ON its validUntil second");
+        check(!Wire::verifyDeviceBindingV2($case->binding, $case->validUntil + 1,
+            $case->deviceDid), "bindingV2[{$n}] is expired one second later");
+    }
+
+    foreach ($bv->reject as $case) {
+        check(!Wire::verifyDeviceBindingV2($case->input, $checkNow),
+            "bindingV2 reject[{$case->name}] is refused");
+    }
+}
+
+// --------------------------------------------------- a P-256 OWNER root (no vectors yet)
+//
+// The vendored fixtures carry Ed25519 owners only, so this branch would otherwise ship
+// unexercised. An owner root MAY be P-256: that is the whole reason the hierarchy exists —
+// a Secure Enclave / WebAuthn key is ES256 and cannot sign the Ed25519 wire itself, so it
+// signs a binding and a software device key does the day-to-day signing. The JavaScript
+// door verifies such an owner natively; the Python reference verifies it when the optional
+// `cryptography` backend is present and treats it as UNBOUND when it is not.
+//
+// Minted in process, because a fixture cannot be: there is no P-256 seed in the vectors.
+// The point is not the key, it is that the two encodings a real client emits — ASN.1 DER
+// from a Secure Enclave, raw r||s from WebCrypto — both verify, and that a tamper does not.
+// (Checked against the JavaScript door directly while this was written: it returns the same
+// four answers for these very bytes.)
+
+if (Wire::p256Available()) {
+    $devSeed = hex2bin(str_repeat('18', 32));
+    $deviceDid = Wire::didFromSeed($devSeed);
+    $ec = openssl_pkey_new(['private_key_type' => OPENSSL_KEYTYPE_EC,
+        'curve_name' => 'prime256v1']);
+    $det = openssl_pkey_get_details($ec);
+    $x = str_pad($det['ec']['x'], 32, "\0", STR_PAD_LEFT);
+    $y = str_pad($det['ec']['y'], 32, "\0", STR_PAD_LEFT);
+    // SEC1 point compression: the parity of Y, then X. did:key multicodec 0x1200 = p256-pub.
+    $rootDid = 'did:key:z' . Wire::b58encode("\x80\x24" . chr(2 + (ord($y[31]) & 1)) . $x);
+    $ts = 1784273681;
+    $payload = Wire::bindingV2Payload($rootDid, $deviceDid, $ts, 0);
+    openssl_sign($payload, $der, $ec, OPENSSL_ALGO_SHA256);
+    $devSecret = sodium_crypto_sign_secretkey(sodium_crypto_sign_seed_keypair($devSeed));
+    $p256 = [
+        'typ' => Wire::BINDING_V2_TYP, 'rootDid' => $rootDid, 'deviceDid' => $deviceDid,
+        'ts' => $ts, 'validUntil' => 0, 'sig' => base64_encode($der),
+        'deviceSig' => base64_encode(sodium_crypto_sign_detached($payload, $devSecret)),
+    ];
+    check(Wire::didKeyCurve($rootDid) === 'p256',
+        'a p256 did:key is read as p256 by the BINDING decoder');
+    check(Wire::verifyDeviceBindingV2($p256, $ts, $deviceDid),
+        'a P-256 owner binding with an ASN.1 DER signature verifies');
+
+    // The same signature as raw r||s (IEEE P1363 / WebCrypto), which must also verify.
+    $i = 2 + ((ord($der[1]) & 0x80) ? (ord($der[1]) & 0x7f) : 0);
+    $rs = '';
+    for ($n = 0; $n < 2; $n++) {
+        $len = ord($der[$i + 1]);
+        $rs .= str_pad(ltrim(substr($der, $i + 2, $len), "\0"), 32, "\0", STR_PAD_LEFT);
+        $i += 2 + $len;
+    }
+    $raw = $p256;
+    $raw['sig'] = base64_encode($rs);
+    check(strlen($rs) === 64 && Wire::verifyDeviceBindingV2($raw, $ts, $deviceDid),
+        'the SAME P-256 signature as raw r||s (64 bytes) verifies too');
+
+    $tampered = $p256;
+    $bytes = base64_decode($tampered['sig'], true);
+    $bytes[10] = chr(ord($bytes[10]) ^ 0x01);
+    $tampered['sig'] = base64_encode($bytes);
+    check(!Wire::verifyDeviceBindingV2($tampered, $ts, $deviceDid),
+        'a tampered P-256 owner signature is refused');
+
+    $foreign = $p256;
+    $foreign['deviceSig'] = $p256['sig'];       // the owner's signature, not the device's
+    check(!Wire::verifyDeviceBindingV2($foreign, $ts, $deviceDid),
+        'a P-256 owner cannot countersign for the device (the device is always Ed25519)');
+} else {
+    echo "skip: no OpenSSL here, so the P-256 owner branch was not exercised\n";
+}
+
 // ------------------------------------------------------------------ reject set
 
 // THE MESSAGE HALF, which this walk used to skip entirely. Every case below is an object

@@ -50,6 +50,16 @@ interface Store
     /** The account row for `$did`, or null. */
     public function getAccount(string $did): ?array;
 
+    /**
+     * Write the account row for `$did` — or DELETE it, when `$row` is null.
+     *
+     * The one caller is the fold that runs when a device with an existing UNBOUND row
+     * first proves its owner (Entry::foldDeviceIntoOwner): the device's history moves to
+     * the owner and the device row goes. `noteContact` still owns the ordinary path, so
+     * nothing else in the plugin writes a row by hand.
+     */
+    public function putAccount(string $did, ?array $row): void;
+
     /** The owner a device DID is pinned to, or null when unpinned. */
     public function getDeviceOwner(string $deviceDid): ?string;
 
@@ -110,6 +120,15 @@ final class MemoryStore implements Store
     public function getAccount(string $did): ?array
     {
         return $this->ledger[$did] ?? null;
+    }
+
+    public function putAccount(string $did, ?array $row): void
+    {
+        if ($row === null) {
+            unset($this->ledger[$did]);
+            return;
+        }
+        $this->ledger[$did] = $row;
     }
 
     public function getDeviceOwner(string $deviceDid): ?string

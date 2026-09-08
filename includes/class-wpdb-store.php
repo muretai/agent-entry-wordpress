@@ -165,6 +165,26 @@ final class WpdbStore implements Store
         ];
     }
 
+    /**
+     * Write, or DELETE, one ledger row. Called only by the device->owner fold, which moves
+     * a device's history onto the owner it has just proved. REPLACE rather than INSERT …
+     * ON DUPLICATE KEY UPDATE because the fold hands over a WHOLE row, counts included:
+     * an increment would double what it is trying to move.
+     */
+    public function putAccount(string $did, ?array $row): void
+    {
+        $t = $this->ledgerTable();
+        if ($row === null) {
+            $this->db->query($this->db->prepare("DELETE FROM {$t} WHERE did = %s", $did));
+            return;
+        }
+        $this->db->query($this->db->prepare(
+            "REPLACE INTO {$t} (did, messages, first_seen, last_seen) VALUES (%s, %d, %d, %d)",
+            $did, (int) ($row['messages'] ?? 0), (int) ($row['first_seen'] ?? time()),
+            (int) ($row['last_seen'] ?? time())
+        ));
+    }
+
     /** The whole ledger, newest contact first — what the admin screen shows. */
     public function recentAccounts(int $limit = 25): array
     {
