@@ -543,6 +543,9 @@ final class Wire
             if ($sig === null || strlen($sig) !== SODIUM_CRYPTO_SIGN_BYTES) {
                 return false;
             }
+            if (!self::ed25519WireOk($pub, $sig)) {
+                return false;
+            }
             $payload = self::signingPayload($contextId, $from, $messageId, $text, $timestamp, $to);
             return sodium_crypto_sign_verify_detached($sig, $payload, $pub);
         } catch (\Throwable $e) {
@@ -708,6 +711,76 @@ final class Wire
         return $ok === 1;
     }
 
+    /** The byte-level gate every Ed25519 verification here opens with — the twin of
+     *  `_ed25519_wire_ok` in agent-seam's python/shared/crypto.py and `ed25519WireOk` in
+     *  js/seam.mjs, carrying the same fourteen encodings.
+     *
+     *  libsodium already refuses these, and has done so deliberately for years — measured
+     *  here on 1.0.22, `sodium_crypto_sign_verify_detached` refuses the identity point
+     *  while verifying a genuine signature through the same call. So this file was never
+     *  exposed. It is added anyway, because "the host refuses it" is exactly what was
+     *  believed about the JavaScript twin until 2026-09-09, when `node:crypto` was measured
+     *  answering FALSE on Node 26.5.1 and TRUE on Node 22.23.2 for these same bytes, at the
+     *  same reported OpenSSL. One implementation that asks its host is one implementation
+     *  whose verdict is a property of the host.
+     *
+     *  Four refusals: the public key and the signature's R component are each refused as a
+     *  small-order encoding, and each refused when y is not reduced below p — a decoder that
+     *  masks y to 255 bits would otherwise read two spellings as one point. */
+    private static function ed25519WireOk(string $pub, string $sig): bool
+    {
+        static $small = [
+            // y = 0 (x = +-sqrt(-1)) -- order 4
+            '0000000000000000000000000000000000000000000000000000000000000000' => 1,
+            '0000000000000000000000000000000000000000000000000000000000000080' => 1,
+            // y = 1 (x = 0) -- order 1: the IDENTITY, the element that signs everything
+            '0100000000000000000000000000000000000000000000000000000000000000' => 1,
+            '0100000000000000000000000000000000000000000000000000000000000080' => 1,
+            // order 8
+            '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05' => 1,
+            '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85' => 1,
+            // order 8 (the other one)
+            'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a' => 1,
+            'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa' => 1,
+            // y = p-1 (x = 0) -- order 2
+            'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f' => 1,
+            'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' => 1,
+            // y = p, i.e. y == 0 -- the NON-CANONICAL spelling of the order-4 point
+            'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f' => 1,
+            'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' => 1,
+            // y = p+1, i.e. y == 1 -- the NON-CANONICAL spelling of the IDENTITY
+            'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f' => 1,
+            'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' => 1,
+        ];
+        if (strlen($pub) !== 32 || strlen($sig) < 32) {
+            return false;
+        }
+        $r = substr($sig, 0, 32);
+        if (isset($small[bin2hex($pub)]) || isset($small[bin2hex($r)])) {
+            return false;
+        }
+        return self::yReduced($pub) && self::yReduced($r);
+    }
+
+    /** True when the little-endian y of a 32-byte point, with the sign bit cleared, is
+     *  below p = 2^255 - 19. No bignum extension: the top byte is masked and the value is
+     *  compared against p byte by byte from the most significant end. */
+    private static function yReduced(string $point): bool
+    {
+        $p = "\xed\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff"
+           . "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x7f";
+        $y = $point;
+        $y[31] = chr(ord($y[31]) & 0x7f);
+        for ($i = 31; $i >= 0; $i--) {
+            $a = ord($y[$i]);
+            $b = ord($p[$i]);
+            if ($a !== $b) {
+                return $a < $b;
+            }
+        }
+        return false;   // equal to p is not reduced
+    }
+
     /** Curve-dispatching signature verify against a did:key — a binding's owner may be
      *  Ed25519 OR P-256; the device is always Ed25519. Total and fail-closed. */
     private static function verifyDidSig(string $did, string $signature, string $message): bool
@@ -716,6 +789,7 @@ final class Wire
             $k = self::decodeDidKey($did);
             if ($k['curve'] === 'ed25519') {
                 return strlen($signature) === SODIUM_CRYPTO_SIGN_BYTES
+                    && self::ed25519WireOk($k['key'], $signature)
                     && sodium_crypto_sign_verify_detached($signature, $message, $k['key']);
             }
             return self::p256Verify($k['key'], $signature, $message);
