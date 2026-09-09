@@ -61,6 +61,48 @@ function check(bool $cond, string $label, string $detail = ''): void
 }
 
 /**
+ * A vendored group, read BY NAME and floored.
+ *
+ * Every check in this file lives inside a `foreach` over a group of `tests/wire_vectors.json`,
+ * and a `foreach` over nothing passes. That file is not ours: it arrives by re-vendoring from
+ * agent-seam, so a group can be renamed, emptied or shortened upstream without a line of this
+ * plugin changing — and the suite would keep printing CONFORMANT over the cases it no longer
+ * walks. It has happened here: the message half of the reject set was skipped for the whole
+ * life of this runner and looked exactly like a half that passed.
+ *
+ * So a group is taken by NAME (a rename is a recorded failure, not a silent zero) and counted
+ * against what the pinned vendor carries today. Growth upstream is welcome and silent;
+ * shrinkage is not. A missing or short group is reported as a failure and the walk that
+ * follows gets an empty list, so the suite still runs to the end and reports everything.
+ *
+ * @param mixed $vectors
+ * @return array<int, mixed>
+ */
+function vectorGroup($vectors, string $path, int $floor): array
+{
+    $node = $vectors;
+    $seen = '';
+    foreach (explode('.', $path) as $key) {
+        $seen = $seen === '' ? $key : "{$seen}.{$key}";
+        if (!($node instanceof \stdClass) || !property_exists($node, $key)) {
+            check(false, "the vectors carry the `{$path}` group",
+                "no `{$seen}` — a re-vendor renamed or dropped it, and a walk over a missing "
+                . 'group checks nothing');
+            return [];
+        }
+        $node = $node->$key;
+    }
+    if (!is_array($node)) {
+        check(false, "`{$path}` is a list of cases", 'got ' . gettype($node));
+        return [];
+    }
+    check(count($node) >= $floor, "`{$path}` still carries at least {$floor} case(s)",
+        'got ' . count($node) . ' — a re-vendor shortened the group, and every check in the '
+        . 'walk below would have passed over nothing');
+    return $node;
+}
+
+/**
  * json_decode gives arrays; an EMPTY JSON object comes back as an empty PHP array, which
  * canonicalJson would render `[]`. The fixtures contain `{}`, so re-read those spots as
  * stdClass. Decoding to objects and converting back is the honest way to keep the
@@ -96,7 +138,7 @@ $rawDecoded = json_decode((string) file_get_contents($vectorsPath), false);
 
 // ------------------------------------------------------------------ canonical JSON
 
-foreach ($rawDecoded->canonical as $i => $case) {
+foreach (vectorGroup($rawDecoded, 'canonical', 14) as $i => $case) {
     $payload = reviveEmptyObjects($case->payload);
     try {
         $got = Wire::canonicalJson($payload);
@@ -115,7 +157,7 @@ foreach ($rawDecoded->canonical as $i => $case) {
 // These are the values whose RENDERING differs between Python and JavaScript. The
 // contract is to REFUSE them, not to guess a spelling.
 
-foreach ($rawDecoded->numberHazards as $case) {
+foreach (vectorGroup($rawDecoded, 'numberHazards', 8) as $case) {
     $name = $case->name ?? 'unnamed';
     $threw = false;
     try {
@@ -131,7 +173,7 @@ foreach ($rawDecoded->numberHazards as $case) {
 // The vector set deliberately includes p256 DIDs (multicodec 0x8024). An Agent Entry
 // speaks Ed25519 and nothing else, so those are not "unsupported yet" — they must be
 // REFUSED. A twin that quietly decoded one would be resolving a key it cannot verify with.
-foreach ($rawDecoded->did as $case) {
+foreach (vectorGroup($rawDecoded, 'did', 10) as $case) {
     $short = substr($case->publicHex, 0, 12);
     if (($case->curve ?? '') === 'ed25519') {
         $pub = hex2bin($case->publicHex);
@@ -153,7 +195,7 @@ foreach ($rawDecoded->did as $case) {
 
 // ------------------------------------------------------------------ signing payload
 
-foreach ($rawDecoded->envelope as $case) {
+foreach (vectorGroup($rawDecoded, 'envelope', 4) as $case) {
     $got = Wire::signingPayload(
         $case->contextId ?? null,
         $case->from,
@@ -171,7 +213,7 @@ foreach ($rawDecoded->envelope as $case) {
 
 // ------------------------------------------------------------------ card envelope
 
-foreach ($rawDecoded->cardpub as $case) {
+foreach (vectorGroup($rawDecoded, 'cardpub', 2) as $case) {
     $card = reviveEmptyObjects($case->card);
     $got = Wire::cardEnvelopePayload($card, $case->ts);
     check(
@@ -194,9 +236,15 @@ foreach ($rawDecoded->cardpub as $case) {
 // canonical payload must come out byte-identical to the recorded ones — a canonicaliser
 // that put one field in the wrong place could not pass it.
 
+// `isset` on a vendored group is itself a check that cannot fail: rename `bindingV2`
+// upstream and this whole block — the account layer — disappears without a word. Say so.
+check(isset($rawDecoded->bindingV2),
+    'the vectors carry the `bindingV2` group this suite walks',
+    'a re-vendor renamed or dropped it, and the account layer would go unchecked in silence');
 if (isset($rawDecoded->bindingV2)) {
     $bv = $rawDecoded->bindingV2;
     $checkNow = $bv->checkNow;
+    vectorGroup($rawDecoded, 'bindingV2.cases', 2);
     $otherDid = 'did:key:z6MkwgaR63138bEEgad7uk993KMX54vBA6KTB4sFhCPnSB2e';
 
     foreach ($bv->cases as $case) {
@@ -263,7 +311,7 @@ if (isset($rawDecoded->bindingV2)) {
     // passed no expectation (this one, until now) or that read the device DID off the
     // binding could never fail that case, which is the anti-copy pin the whole field exists
     // for: a binding lifted onto another sender's message must not verify.
-    foreach ($bv->reject as $case) {
+    foreach (vectorGroup($rawDecoded, 'bindingV2.reject', 4) as $case) {
         $expected = $case->expectedDeviceDid ?? null;
         check(!Wire::verifyDeviceBindingV2($case->input, $checkNow, $expected),
             "bindingV2 reject[{$case->name}] is refused"
@@ -347,62 +395,192 @@ if (Wire::p256Available()) {
 // PHP 7.4 and 8.3 while the four other references refused it, because `base64_decode`
 // tolerates the four bits a padded signature's last character discards. Wire::strictB64
 // closes it; this loop is what stops it coming back.
-if (isset($rawDecoded->reject->message)) {
-    foreach ($rawDecoded->reject->message as $case) {
-        $i = $case->input;
-        // The recipient is named by US, from the case or from the message's SIGNED `to` —
-        // never from an unsigned field. `wire-names-its-own-recipient` carries a
-        // `recipientDid` equal to its own `to` precisely so that reading it off the wire
-        // compares the message against itself and always agrees.
-        $me = (isset($case->verifierNamesNoRecipient) && $case->verifierNamesNoRecipient)
-            ? '' : ($case->recipientDid ?? $i->to);
-        $verified = Wire::verifyEnvelope(
-            $i->from, $me, $i->messageId, $i->contextId ?? null,
-            $i->timestamp, $i->text, $i->sig ?? null
-        );
-        check(!$verified, "reject[message/{$case->name}] is refused");
+foreach (vectorGroup($rawDecoded, 'reject.message', 9) as $case) {
+    $i = $case->input;
+    // The recipient is named by US, from the case or from the message's SIGNED `to` —
+    // never from an unsigned field. `wire-names-its-own-recipient` carries a
+    // `recipientDid` equal to its own `to` precisely so that reading it off the wire
+    // compares the message against itself and always agrees.
+    $me = (isset($case->verifierNamesNoRecipient) && $case->verifierNamesNoRecipient)
+        ? '' : ($case->recipientDid ?? $i->to);
+    $verified = Wire::verifyEnvelope(
+        $i->from, $me, $i->messageId, $i->contextId ?? null,
+        $i->timestamp, $i->text, $i->sig ?? null
+    );
+    check(!$verified, "reject[message/{$case->name}] is refused");
+}
+
+// The control that keeps the loop above honest: one envelope signed HERE, which must
+// verify. Without it, a verifyEnvelope that answered false to everything would report
+// every case refused and look perfect. It reads no vector, so it runs unconditionally —
+// it used to sit inside an `isset($rawDecoded->reject->message)` guard, which meant an
+// upstream rename of `reject` deleted the walk AND the control that proves the walk means
+// something, leaving the suite to print CONFORMANT over neither.
+$ctlSeed = str_repeat("\x2b", 32);
+$ctlFrom = Wire::didFromSeed($ctlSeed);
+$ctlTo = Wire::didFromSeed(str_repeat("\x3c", 32));
+$ctlSig = Wire::signEnvelope($ctlSeed, null, $ctlFrom, 'control-1', 'hello', 1757000000, $ctlTo);
+check(
+    Wire::verifyEnvelope($ctlFrom, $ctlTo, 'control-1', null, 1757000000, 'hello', $ctlSig),
+    'this suite can still say YES — an envelope signed here verifies, so the refusals '
+    . 'above are refusals and not a verifier that answers false to everything'
+);
+
+// ------------------------------------------------- the rest of the reject set, BY NAME
+//
+// WHAT USED TO BE HERE was a generic walk over `get_object_vars($rawDecoded->reject)` with a
+// DID-shaped guard inside it: `if ($group === 'did' || isset($case->did))`. It drove the
+// three `did` cases and walked SEVEN more in total silence — `cardpub` (3), `invite` (2),
+// `claim` (2) — because those cases carry `envelope` or `input` and never a bare `did`. The
+// guard was never true for any of them, in any vendored version. A group nobody drives
+// prints exactly like a group that passes, and the generic shape made that invisible:
+// adding a group upstream added silence, not coverage.
+//
+// So the reject set is a LEDGER now. Every group the vendored file carries is named here and
+// accounted for — driven, or declared out of this door's reach with the reason it is out of
+// reach. A rename, an addition or a removal upstream fails the census immediately instead of
+// quietly changing what runs.
+
+// Guarded, because the census is the one place a missing `reject` would be a PHP fatal
+// rather than a named failure — and a runner that dies has not reported the rest of what it
+// knows. An absent group becomes an empty census, which the check below names.
+$rejectGroups = isset($rawDecoded->reject) && $rawDecoded->reject instanceof \stdClass
+    ? array_keys(get_object_vars($rawDecoded->reject))
+    : [];
+sort($rejectGroups);
+$expectedRejectGroups = ['cardpub', 'claim', 'did', 'encoding', 'invite', 'keystate', 'message'];
+check(
+    $rejectGroups === $expectedRejectGroups,
+    'the reject set carries exactly the groups this suite accounts for',
+    'got [' . implode(', ', $rejectGroups) . '], accounted for ['
+        . implode(', ', $expectedRejectGroups) . '] — drive the new group below or say '
+        . 'in one line why this door cannot'
+);
+
+// --- did (3): the did:key codec. Driven.
+foreach (vectorGroup($rawDecoded, 'reject.did', 3) as $case) {
+    $threw = false;
+    try {
+        Wire::publicKeyFromDid($case->did);
+    } catch (\Throwable $e) {
+        $threw = true;
     }
-    // The control that keeps the loop above honest: one envelope signed HERE, which must
-    // verify. Without it, a verifyEnvelope that answered false to everything would report
-    // every case refused and look perfect.
-    $ctlSeed = str_repeat("\x2b", 32);
-    $ctlFrom = Wire::didFromSeed($ctlSeed);
-    $ctlTo = Wire::didFromSeed(str_repeat("\x3c", 32));
-    $ctlSig = Wire::signEnvelope($ctlSeed, null, $ctlFrom, 'control-1', 'hello', 1757000000, $ctlTo);
+    check($threw, "reject[did/{$case->name}] is refused");
+}
+
+// --- cardpub (3): the card envelope, driven at last.
+//
+// This plugin PUBLISHES card envelopes and never consumes one, so there is no product
+// verifier to call. The visitor's side is composed here from the door's own pieces —
+// `cardEnvelopePayload` for the bytes, `publicKeyFromDid` for the key — exactly as
+// tests/check-live.php composes it against a live door. What the three cases pin is that
+// the payload builder binds the card body and `ts` tightly enough that a flipped signature
+// character, another signer, or a tampered body cannot be made to verify under the DID the
+// CALLER asked for (`expectedDid`, at the top level of the case, because whose card was
+// asked for is the caller's idea and never the envelope's).
+$verifyCardEnvelope = function ($envelope, string $expectedDid): bool {
+    try {
+        $card = reviveEmptyObjects($envelope->card);
+        if (!is_array($card)) {
+            return false;
+        }
+        $payload = Wire::cardEnvelopePayload($card, $envelope->ts);
+        $pub = Wire::publicKeyFromDid($expectedDid);
+        $raw = base64_decode((string) ($envelope->sig ?? ''), true);
+        if ($raw === false || strlen($raw) !== SODIUM_CRYPTO_SIGN_BYTES) {
+            return false;
+        }
+        return sodium_crypto_sign_verify_detached($raw, $payload, $pub);
+    } catch (\Throwable $e) {
+        return false;
+    }
+};
+
+foreach (vectorGroup($rawDecoded, 'reject.cardpub', 3) as $case) {
+    // The refusal must be the SIGNATURE and nothing cheaper. Each of these envelopes names
+    // the DID the caller asked for, so a verifier that only compared the two strings would
+    // accept all three — assert the bait is really there before asserting the refusal.
     check(
-        Wire::verifyEnvelope($ctlFrom, $ctlTo, 'control-1', null, 1757000000, 'hello', $ctlSig),
-        'this suite can still say YES — an envelope signed here verifies, so the refusals '
-        . 'above are refusals and not a verifier that answers false to everything'
+        ($case->envelope->card->did ?? null) === $case->expectedDid,
+        "reject[cardpub/{$case->name}] names the did the caller asked for, so only the "
+        . 'signature can refuse it'
+    );
+    check(
+        !$verifyCardEnvelope($case->envelope, $case->expectedDid),
+        "reject[cardpub/{$case->name}] is refused"
     );
 }
 
-if (isset($rawDecoded->reject)) {
-    foreach (get_object_vars($rawDecoded->reject) as $group => $cases) {
-        if ($group === 'message') {
-            continue;                       // driven above, properly
-        }
-        if (!is_array($cases)) {
-            continue;                       // encoding/keystate are objects: {note, accept, refuse}
-        }
-        foreach ($cases as $case) {
-            $label = is_object($case) ? ($case->name ?? $group) : (string) $case;
-            // The reject set is about DIDs and signatures that must not verify.
-            if ($group === 'did' || (is_object($case) && isset($case->did))) {
-                $bad = is_object($case) ? ($case->did ?? null) : $case;
-                if (!is_string($bad)) {
-                    continue;
-                }
-                $threw = false;
-                try {
-                    Wire::publicKeyFromDid($bad);
-                } catch (\Throwable $e) {
-                    $threw = true;
-                }
-                check($threw, "reject[{$group}/{$label}] is refused");
-            }
-        }
-    }
+// ...and the control, the same duty the message walk owes: a card envelope this door MAKES
+// must verify under that composition, and must stop verifying the moment the body moves.
+// Without both, "all three refused" would only mean the composition refuses everything.
+$cpSeed = str_repeat("\x5d", 32);
+$cpDid = Wire::didFromSeed($cpSeed);
+$cpCard = ['did' => $cpDid, 'name' => 'Control', 'url' => 'https://control.example/'];
+$cpEnvelope = json_decode((string) json_encode(Wire::makeCardEnvelope($cpSeed, $cpCard, 1757000000)));
+check(
+    $verifyCardEnvelope($cpEnvelope, $cpDid),
+    'this suite can still say YES about a card envelope — one signed here verifies, so the '
+    . 'cardpub refusals above are refusals and not a verifier that answers false to everything'
+);
+$cpTampered = json_decode((string) json_encode(Wire::makeCardEnvelope($cpSeed, $cpCard, 1757000000)));
+$cpTampered->card->url = 'https://attacker.example/';
+check(
+    !$verifyCardEnvelope($cpTampered, $cpDid),
+    'the signed card envelope binds the card BODY: moving `url` after signing stops it verifying'
+);
+
+// --- claim (2): named one at a time, because they are refused for different reasons and
+// only one of those reasons belongs to this door.
+$claimByName = [];
+foreach (vectorGroup($rawDecoded, 'reject.claim', 2) as $case) {
+    $claimByName[$case->name] = $case;
 }
+$verifyClaimMessage = function ($case): bool {
+    $m = $case->input->message;
+    return Wire::verifyEnvelope(
+        $m->from, $m->to, $m->messageId, $m->contextId ?? null,
+        $m->timestamp, $m->text, $m->sig ?? null
+    );
+};
+$claimsNamed = isset($claimByName['claim-unsigned'], $claimByName['claim-unknown-nonce']);
+check(
+    $claimsNamed,
+    'the claim reject cases are the two this suite names',
+    'got [' . implode(', ', array_keys($claimByName)) . ']'
+);
+if ($claimsNamed) {
+    check(
+        !$verifyClaimMessage($claimByName['claim-unsigned']),
+        'reject[claim/claim-unsigned] is refused: a claim carrying an all-zero signature '
+        . 'never gets as far as writing trust'
+    );
+    // AND THE ONE THIS DOOR CANNOT REFUSE, said out loud rather than walked over. The
+    // message inside `claim-unknown-nonce` is VALIDLY signed; the rejection the vector
+    // demands comes from a one-time nonce THIS device issued, which is receiver state a
+    // door that extends no invites never holds. Asserting `!verifyEnvelope` here would go
+    // red for a reason unrelated to the code — the shape that makes a walk over the wrong
+    // field look like coverage. So pin what is actually true: the crypto says yes.
+    check(
+        $verifyClaimMessage($claimByName['claim-unknown-nonce']),
+        'reject[claim/claim-unknown-nonce] is NOT a crypto refusal — its message verifies, '
+        . 'so the rejection this vector demands is nonce state, not a signature'
+    );
+}
+
+// --- invite (2), encoding, keystate: NOT DRIVEN HERE, and named so that saying so costs a
+// line each. These are `echo`, not `check()`: a check that always passes because it asserts
+// nothing is the very defect this section was rewritten to remove. The census above is what
+// keeps the list honest — a group that appears upstream fails it until it is driven or
+// declared.
+echo "skip: reject[invite] (2 cases) — shared/invite.verify_invite judges a signed invite at "
+    . "the case's `checkNow`, and this plugin has no invite entry point at all; writing the "
+    . "invite payload in this file would be a second implementation testing itself\n";
+echo "skip: reject[encoding] — raw document BYTES refused at the parse boundary, an "
+    . "object-shaped group ({note, accept, refuse}), not a duty of a door that verifies one "
+    . "envelope at a time\n";
+echo "skip: reject[keystate] — the key-rotation state machine, object-shaped and stateful; "
+    . "this door holds one seed and no rotation history\n";
 
 // ------------------------------------------------------------------ sign/verify round trip
 //
@@ -439,6 +617,27 @@ check(
 check(
     strpos(Wire::signingPayload(null, $did, 'm2', $jp, 1752451200, $to), '群れたい') !== false,
     'non-ASCII stays LITERAL in the signed bytes (not \\uXXXX)'
+);
+
+// ------------------------------------------------------------------ the count floor
+//
+// THE LAST THING THAT CAN GO WRONG SILENTLY. Every check above is reached by walking a file
+// this repository does not own, and a suite that runs NOTHING prints CONFORMANT exactly as
+// loudly as one that runs everything — `0 passed, 0 failed` is a green verdict. The group
+// floors upstream catch a group that shrinks; this catches the whole run collapsing for a
+// reason no single group would notice: a vendored file that parses to an empty object, an
+// early `exit` slipped into a helper, a walk accidentally nested inside a false branch.
+//
+// Only ONE branch of this file is environment-dependent — the five P-256 owner checks, which
+// need OpenSSL — so the floor is stated for both worlds rather than guessed at with a margin.
+// Raising it when checks are added is a one-line, deliberate act, and that is the point.
+$ran = $pass + count($fail);
+$floor = Wire::p256Available() ? 114 : 109;
+check(
+    $ran >= $floor,
+    "the suite ran at least {$floor} checks",
+    "ran {$ran} — checks went missing rather than failing, which is the one way this runner "
+        . 'can report CONFORMANT while proving nothing'
 );
 
 echo str_repeat('-', 60) . "\n";
