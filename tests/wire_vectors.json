@@ -98,6 +98,15 @@
       "canonical": "{\"A\":4,\"a\":2,\"z\":1,\"群\":3}"
     },
     {
+      "name": "key-ordering-astral",
+      "payload": {
+        "😀": 1,
+        "�": 2
+      },
+      "why": "THE key-ordering case that can fail. An ASTRAL key beside a HIGH-BMP one is the only shape where sorting by UTF-16 code unit and sorting by code point disagree: U+1F600 leads with unit 0xD83D, which is BELOW U+FFFD's single 0xFFFD, so a UTF-16 sort emits the emoji first and the contract emits it second. `key-ordering-unicode` above states the rule; every key in it is under U+D800, where the two orders coincide, so it is green in a port that gets this wrong.",
+      "canonical": "{\"�\":2,\"😀\":1}"
+    },
+    {
       "name": "negative-and-zero",
       "payload": {
         "a": 0,
@@ -960,6 +969,21 @@
         "note": "`from` is the Ed25519 IDENTITY point as a did:key and `sig` is the constant blob R = identity, S = 0, which satisfies [S]B == R + [h]A over EVERY message. No private key exists or is needed. Derive the verifying key through the door that refuses the fourteen small-order encodings — as `from` AND as the signature's first 32 bytes — not through the codec."
       },
       {
+        "name": "torsion-cofactored-only",
+        "category": "cofactored-verification",
+        "mustReject": true,
+        "input": {
+          "from": "did:key:z6MknHDNUXF7xNLmgKJrBBZipjcFrLq5iWg861a28JLd9oJi",
+          "to": "did:key:z6MkknhhwAGsRrcTTthPSsBbQtrNX6CMqt4poro5jdP6uCue",
+          "messageId": "m-torsion-3",
+          "contextId": "c1",
+          "timestamp": 1784273681,
+          "text": "pay the invoice",
+          "sig": "cVyFP6XmgBQBQMjiq3eNKbiHGCcKh7X8fhbZ7gsUJRVpcJUECNsGrXiaTVB1NjhGCrQWJAMxzunaZuWbyBOzCg=="
+        },
+        "note": "a MIXED-ORDER `from` key (an honest point plus the order-2 point) and a signature built so that [S]B - R - [h]A is exactly one nonzero torsion point. The COFACTORED (ZIP-215) equation [8][S]B == [8]R + [8][h]A multiplies that residual away and ACCEPTS; the cofactorless equation [S]B == R + [h]A, which RFC 8032 §5.1.7 writes and this wire requires, REFUSES. Neither the key nor R is in the fourteen small-order encodings, `S` is a canonical scalar and the base64 is canonical, so nothing but the equation itself can refuse this message. See spec/seam.md §2.1."
+      },
+      {
         "name": "sig-not-canonical-base64",
         "category": "sig-not-canonical-base64",
         "mustReject": true,
@@ -1100,6 +1124,12 @@
           "documentHex": "7b2261223a317d",
           "canonical": "{\"a\":1}",
           "why": "the OTHER HALF of `leading-utf8-bom`, and the reason that refusal is about the mark rather than about this document. These two byte strings differ by three bytes and canonicalize to one — so exactly one of them may be readable, and RFC 8259 §8.1 says which. A reference that refused both would pass the refuse half and fail here."
+        },
+        {
+          "name": "duplicate-key-last-wins",
+          "documentHex": "7b2261223a312c2261223a327d",
+          "canonical": "{\"a\":2}",
+          "why": "one name, twice, in one object. RFC 8259 §4 says names SHOULD be unique and does not say what to do when they are not, so a parser that takes the FIRST occurrence is as defensible as one that takes the last — and it signs {\"a\":1} where this wire signs {\"a\":2}. The contract is LAST-WINS, which is what all four references were measured doing; see spec/seam.md §1.2 for why this is an accept and not a refusal."
         }
       ],
       "refuse": [
@@ -1169,7 +1199,7 @@
       ]
     },
     "keystate": {
-      "note": "The anti-rollback ratchet. `pinned` is a KeyState the CALLER kept from an earlier verified contact; `inline` is what the sender attached to this message. Resolve with both and compare against `expect` — JavaScript `resolveOpDid(rootDid, inline, checkNow, {pinned})`, Python `keystate.resolve_op_did(rootDid, inline, pinned, now=checkNow)`. The argument ORDER differs between the two references, which is why the vector names fields and never positions. Every record here verifies; nothing in this group is about a bad signature. A case carrying `mustNotRaise` must also not throw: the resolver is pure and total, and a record whose `revokedOps` is a number or a boolean is one a stranger can mint against their own root key — an exception there is a verifier switched off by one field, which is a DIFFERENT failure from a wrong answer, so report which. Go and Rust implement no KeyState, and their runners SKIP this group BY NAME rather than silently — an omission nobody can see is the same as a check nobody has.",
+      "note": "The anti-rollback ratchet. `pinned` is a KeyState the CALLER kept from an earlier verified contact; `inline` is what the sender attached to this message. Resolve with both and compare against `expect` — JavaScript `resolveOpDid(rootDid, inline, checkNow, {pinned})`, Python `keystate.resolve_op_did(rootDid, inline, pinned, now=checkNow)`. The argument ORDER differs between the two references, which is why the vector names fields and never positions. Most records here VERIFY — the ratchet is about freshness, not authenticity — and the three `keystate-bad-signature` cases are the exception that makes the root-signature check load-bearing: without them it could be deleted from both references and every other case stayed green. A case carrying `mustNotRaise` must also not throw: the resolver is pure and total, and a record whose `revokedOps` is a number or a boolean is one a stranger can mint against their own root key — an exception there is a verifier switched off by one field, which is a DIFFERENT failure from a wrong answer, so report which. Go and Rust implement no KeyState, and their runners SKIP this group BY NAME rather than silently — an omission nobody can see is the same as a check nobody has.",
       "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
       "checkNow": 1784273681,
       "accept": [
@@ -1564,6 +1594,84 @@
           "mustNotResolveTo": "did:key:z6Mkk4Li7FrksouqV6ehQnbKh8R5kEkkqtmpQtohPvE3fnKU",
           "expect": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
           "why": "two records at ONE epoch naming different opDids. Equal is not an upgrade, it is a fork, and a resolver that adopts on `>=` takes the stranger's history over the one it verified itself."
+        },
+        {
+          "name": "inline-signature-forged",
+          "category": "keystate-bad-signature",
+          "mustReject": true,
+          "pinned": null,
+          "inline": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 1,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+            "opNextHash": "22171eddd22aa83b54f7824e6fa75ad1dd7877c7425de7c3dc24fa638f795559",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "WOyQMaGQF0bAqiyVEQ+i7dona2Nawe7JQfS/zj9chG7+2800UYift4eJA8db10UnwUM1S+zuPEiUDa/FMWlnDg=="
+          },
+          "mustNotResolveTo": "did:key:z6Mkjut1mue4XRWDrNkvEuxc2MLuB9cN8LpXa5LfK87W5JKb",
+          "expect": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "why": "the accepted `no-pin-first-contact` record carrying a signature this root genuinely made — over a DIFFERENT KeyState. Canonical base64, 64 bytes, the right signer: everything about it is right but the bytes it covers. An inline record that does not verify delegates nothing, so the answer is the root DID. Without this case the root-signature check inside `verify_keystate` / `verifyKeystate` could be deleted and every other case here stayed green."
+        },
+        {
+          "name": "pin-signature-forged",
+          "category": "keystate-bad-signature",
+          "mustReject": true,
+          "pinned": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 2,
+            "rootKey": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da",
+            "rootNextHash": "",
+            "opDid": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+            "opNextHash": "4073768b35722d580d405b4be40b08484a437238cb30ee0e7d1badf36171b852",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "wC/whs877c9o00v/RR9+ZiELMsGIoH5i1aA6SvO+lPYzM85QGqse6x49wU9s9+O8yCKjLIQRsxiyWFnqTRKnBA=="
+          },
+          "inline": null,
+          "mustNotResolveTo": "did:key:z6Mkhow21JWUi49xXiMVnHL18JjZf5dYMSmSwPoHfWU4VN5q",
+          "expect": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "why": "the same defect in the PIN, which is a separate code path: the inline record is verified where it is adopted, the pin where it is trusted. A pin that was SUPPLIED and does not verify is a broken store, not a first contact, so it fails CLOSED to the root rather than degrading to the unpinned answer the argument exists to end."
+        },
+        {
+          "name": "unverified-root-rotated-pin",
+          "category": "keystate-bad-signature",
+          "mustReject": true,
+          "pinned": {
+            "typ": "muretai/keystate/1",
+            "rootDid": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+            "epoch": 2,
+            "rootKey": "dededededededededededededededededededededededededededededededede",
+            "rootNextHash": "",
+            "opDid": "did:key:z6MkhpF78Lxxxj7dhtCcog2PMVEGrPEwpCQnVwGos6Lvmut2",
+            "opNextHash": "4073768b35722d580d405b4be40b08484a437238cb30ee0e7d1badf36171b852",
+            "encPub": "",
+            "encNextHash": "",
+            "guardiansHash": "",
+            "revokedOps": [],
+            "notBefore": 0,
+            "notAfter": null,
+            "ts": 1784273681,
+            "sig": "WOyQMaGQF0bAqiyVEQ+i7dona2Nawe7JQfS/zj9chG7+2800UYift4eJA8db10UnwUM1S+zuPEiUDa/FMWlnDg=="
+          },
+          "inline": null,
+          "mustNotResolveTo": "did:key:z6MkhpF78Lxxxj7dhtCcog2PMVEGrPEwpCQnVwGos6Lvmut2",
+          "expect": "did:key:z6MktojHN9D8obak7C9wjpTzCRrdE5zC6cxt5ANUFnQskgbs",
+          "why": "a pin whose `rootKey` is neither the DID's own key nor anything a lineage could reveal — 32 bytes of `de` — naming a stranger's opDid, with a signature that covers none of it. Python's `_usable_pin` waved every such record through on the argument that a genuine ROOT-ROTATED pin is authorized by a lineage the resolver has no way to see; the argument holds and the branch did not implement it, because it could not tell a rotation from garbage. It can now: a root-rotated pin must still be signed by the rootKey it claims, which every genuine one is and this one is not. Measured on 0.3.1 the two references gave OPPOSITE answers here."
         }
       ]
     },
