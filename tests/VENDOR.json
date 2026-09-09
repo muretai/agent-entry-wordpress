@@ -1,15 +1,20 @@
 {
-  "_": "Written by hand for now \u2014 copy tests/wire_vectors.json from an agent-seam checkout at a tag (git -C ../agent-seam show v0.3.0:vectors/wire_vectors.json > tests/wire_vectors.json) and then update ref, commit, version, date and sha256 here; never edit the copy in place; tests/check_vendor.php holds the copy to these digests without any agent-seam checkout present.",
-  "from": "agent-seam",
-  "repository": "https://github.com/muretai/agent-seam",
-  "ref": "v0.3.2",
-  "commit": "07565135bcdd29b6749c8b87ba70b64b9d6465ba",
-  "version": "0.3.2",
-  "date": "2026-09-09",
-  "files": {
-    "tests/wire_vectors.json": {
-      "source": "vectors/wire_vectors.json",
-      "sha256": "98c614966220d5905ecf682f75041a939fd2a62ce89da82d82c75b53a85ef850"
+    "_": "Written by php tools/vendor-seam.php --ref <tag>. Never edit the copies in place: tests/check_vendor.php holds them to these digests with no agent-seam checkout present, and re-derives them from the recorded commit when one is there. The PHP wire implementation lives in agent-seam at php/seam.php; the ABSPATH guard is added here by the recorded transform, which check_vendor.php applies identically before comparing.",
+    "from": "agent-seam",
+    "repository": "https://github.com/muretai/agent-seam",
+    "ref": "v0.3.4",
+    "commit": "90d6c230e18695cd632bc7851b6ff0a320243178",
+    "version": "0.3.4",
+    "date": "2026-09-09",
+    "files": {
+        "includes/class-wire.php": {
+            "source": "php/seam.php",
+            "sha256": "e54c003d1ca55a7315794fd8f98c70c9b21b443473bd7ab96ed2ed493a57a817",
+            "transform": "wordpress-guard"
+        },
+        "tests/wire_vectors.json": {
+            "source": "vectors/wire_vectors.json",
+            "sha256": "98c614966220d5905ecf682f75041a939fd2a62ce89da82d82c75b53a85ef850"
+        }
     }
-  }
 }

@@ -55,9 +55,9 @@ a file on your server brings agent traffic is selling something.
 
 = Open standard, not a lock-in =
 
-The wire format is an open contract already implemented in Node and Python. This plugin is
-a third implementation, held to the same golden test vectors, and it works with any client
-that speaks the format. Nothing here phones home; no service registration is required, and
+The wire format is an open contract with five reference implementations — JavaScript,
+Python, Go, Rust and PHP. This plugin vendors the PHP one and is held to the same golden
+test vectors, so it works with any client that speaks the format. Nothing here phones home; no service registration is required, and
 none is offered.
 
 == Installation ==

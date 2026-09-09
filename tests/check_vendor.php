@@ -45,8 +45,25 @@ if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'cli-server') {
 $ROOT = dirname(__DIR__);
 $PIN = __DIR__ . '/VENDOR.json';
 
+/** The one transform this plugin applies to a vendored file: plugin files sit under the
+ *  webroot, so the wire implementation opens with a guard refusing to run when loaded
+ *  outside WordPress and outside the test harness. agent-seam has no business knowing
+ *  that, so the guard is added on the way in — and re-derived here, from the same anchor,
+ *  so the puller and the checker cannot drift apart. */
+function applyWordpressGuard(string $src): string
+{
+    $anchor = "namespace Muretai\\AgentEntry;\n\n";
+    if (strpos($src, $anchor) === false) {
+        return $src;   // no anchor: let the comparison fail loudly rather than guess
+    }
+    $guard = "if (!defined('ABSPATH') && !defined('MURETAI_AGENT_ENTRY_STANDALONE')) {\n"
+        . "    // Loaded outside both WordPress and the test harness: refuse rather than run.\n"
+        . "    exit;\n}\n\n";
+    return str_replace($anchor, $anchor . $guard, $src);
+}
+
 /** The copies this repository must carry, by the path VENDOR.json lists them under. */
-$EXPECTED = ['tests/wire_vectors.json'];
+$EXPECTED = ['includes/class-wire.php', 'tests/wire_vectors.json'];
 
 $pass = 0;
 $fail = [];
@@ -190,6 +207,14 @@ if (!file_exists($sibling . '/.git')) {
             $p = (string) $p;
             $source = (string) ($v['source'] ?? '');
             [$st, $theirs] = git($sibling, ['show', "{$commit}:{$source}"]);
+            // A recorded transform is applied HERE, identically to the way
+            // tools/vendor-seam.php applies it on the way in. A transform only the puller
+            // knows how to perform is a pin nobody can check: the digest would still hold
+            // the copy to itself, and the sibling half — the half that proves the bytes
+            // came from the commit the pin names — would report a lie every time.
+            if ($st === 0 && ($v['transform'] ?? null) === 'wordpress-guard') {
+                $theirs = applyWordpressGuard($theirs);
+            }
             $mine = (string) file_get_contents($ROOT . '/' . $p);
             check(
                 $st === 0 && $theirs === $mine,

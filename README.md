@@ -165,10 +165,13 @@ a file on your server brings agent traffic is selling something.
 
 ## For developers: the wire contract
 
-This is a third implementation of a contract two others already speak: the JavaScript door
-`muretai-agent-entry.mjs` in [agent-entry](https://github.com/muretai/agent-entry) and the
-Python reference `python/shared/` in [agent-seam](https://github.com/muretai/agent-seam), the
-seam's home. It is not a new protocol and it does not get to invent bytes:
+`includes/class-wire.php` is not written here. It is **vendored** from
+[agent-seam](https://github.com/muretai/agent-seam) at `php/seam.php`, where it is one of five
+reference implementations — JavaScript, Python, Go, Rust, PHP — held to one set of golden
+vectors. It used to live in this repository, and that meant the seam's own suite never ran
+PHP: when the JavaScript reference was found accepting a small-order signature on Node 22
+(2026-09-09), "is PHP exposed too?" was a question about another repository. It is not a new
+protocol and it does not get to invent bytes:
 
 - **Signature**: Ed25519 over canonical JSON of exactly six fields — `contextId`, `from`,
   `messageId`, `text`, `timestamp`, `to`.
@@ -202,16 +205,24 @@ All four ship in this repo and need no account, no dependency and nothing to obt
 `check-live.php` is read-only without `--handshake`; with it, it sends a real signed message
 and the full battery of refusals a door owes, so point that at a site you own.
 
-The golden vectors are agent-seam's `vectors/wire_vectors.json`, vendored here at the commit
-in `tests/VENDOR.json`. They are edited only upstream: to take a newer set, copy the file from
-an agent-seam checkout at a tag and update the record —
+Two files are vendored from agent-seam at the commit in `tests/VENDOR.json`: the wire
+implementation `includes/class-wire.php` (from `php/seam.php`) and the golden vectors
+`tests/wire_vectors.json`. Both are edited only upstream. To take a newer set —
 
 ```bash
-git -C ../agent-seam show v0.2.0:vectors/wire_vectors.json > tests/wire_vectors.json
-# then ref, commit, version, date and sha256 in tests/VENDOR.json
+php tools/vendor-seam.php --ref v0.3.4      # or --seam /path/to/agent-seam
 ```
 
-— never edit the copy in place. `check_vendor.php` holds the copy to the recorded sha256
+— never edit the copies in place. The puller reads with `git show <commit>:<path>`, so an
+uncommitted edit in an agent-seam checkout cannot travel, and it writes the ref, commit,
+version, date and sha256 into `tests/VENDOR.json` itself rather than asking you to.
+
+**One transform, and it is recorded.** Plugin files sit under the webroot, so
+`includes/class-wire.php` opens with an `ABSPATH` guard that refuses to run when loaded
+outside WordPress and outside the test harness. agent-seam has no business knowing that, so
+the guard is added on the way in and the pin records `"transform": "wordpress-guard"`.
+`check_vendor.php` applies the identical transform before it compares — a transform only the
+puller can perform is a pin nobody can check. `check_vendor.php` holds the copy to the recorded sha256
 using nothing outside this repository. When an agent-seam checkout sits beside it
 (`../agent-seam`, or wherever `MURETAI_AGENT_SEAM` points) it also confirms the recorded
 commit really produces those bytes and says how many commits behind agent-seam's HEAD the
